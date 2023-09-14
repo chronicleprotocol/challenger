@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	defaultGasLimitMultiplier = 1.5
+	defaultGasLimitMultiplier = 1.25
 )
 
 //go:embed ScribeOptimistic.json
