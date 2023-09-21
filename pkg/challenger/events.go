@@ -54,8 +54,8 @@ func (o *OpPokedEvent) constructMessage(
 	contract *abi.Contract,
 	address types.Address,
 ) ([]byte, error) {
-	constructMessage := contract.Methods["constructOpPokeMessage"]
-	calldata, err := constructMessage.EncodeArgs(o.PokeData, o.Schnorr)
+	constructMessage := contract.Methods["constructPokeMessage"]
+	calldata, err := constructMessage.EncodeArgs(o.PokeData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode constructOpPokeMessage args: %v", err)
 	}
