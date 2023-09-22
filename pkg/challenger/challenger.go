@@ -28,13 +28,20 @@ import (
 	"github.com/defiweb/go-eth/abi"
 	"github.com/defiweb/go-eth/rpc"
 	"github.com/defiweb/go-eth/types"
+
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 const SLOT_PERIOD_IN_SEC = 12
 
+const OPPOKED_EVENT_SIG = "0xb9dc937c5e394d0c8f76e0e324500b88251b4c909ddc56232df10e2ea42b3c63"
+
 type PokeData struct {
-	Val uint64 `abi:"val"` // uint128
-	Age uint32 `abi:"age"` // uint32
+	Val *big.Int `abi:"val"` // uint128
+	Age uint32   `abi:"age"` // uint32
 }
 
 type SchnorrData struct {
@@ -47,6 +54,7 @@ type Challenger struct {
 	ctx                context.Context
 	address            types.Address
 	fromBlock          uint64
+	subscriptionURL    string
 	client             *rpc.Client
 	contract           *abi.Contract
 	lastProcessedBlock *big.Int
@@ -58,16 +66,18 @@ func NewChallenger(
 	address types.Address,
 	contract *abi.Contract,
 	fromBlock uint64,
+	subscriptionURL string,
 	client *rpc.Client,
 	wg *sync.WaitGroup,
 ) *Challenger {
 	return &Challenger{
-		ctx:       ctx,
-		address:   address,
-		fromBlock: fromBlock,
-		client:    client,
-		contract:  contract,
-		wg:        wg,
+		ctx:             ctx,
+		address:         address,
+		fromBlock:       fromBlock,
+		client:          client,
+		contract:        contract,
+		wg:              wg,
+		subscriptionURL: subscriptionURL,
 	}
 }
 
@@ -207,6 +217,7 @@ func (c *Challenger) decodeOpPokeChallengedSuccessfully(log types.Log) (*OpPokeC
 
 func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uint16) bool {
 	if poke == nil || poke.BlockNumber == nil {
+		logger.Info("Poke or blocknumber is nil")
 		return false
 	}
 	block, err := c.client.BlockByNumber(c.ctx, types.BlockNumberFromBigInt(poke.BlockNumber), false)
@@ -218,6 +229,7 @@ func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uin
 
 	// Not challengeable by time
 	if block.Timestamp.Before(challengeableFrom) {
+		logger.Infof("Not challengeable by time %v", challengeableFrom)
 		return false
 	}
 
@@ -226,8 +238,9 @@ func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uin
 		logger.Errorf("Failed to check if signature is valid with error: %v", err)
 		return false
 	}
+	logger.Infof("Is opPoke signature valid? %v", valid)
 
-	// Challengeable if signature is not valid
+	// Only challengeable if signature is not valid
 	return !valid
 }
 
@@ -250,7 +263,7 @@ func (c *Challenger) challengeOpPokedEvent(event *OpPokedEvent) error {
 	}
 
 	// Print the transaction hash.
-	logger.Debugf("opChallenge Transaction hash: %s", txHash.String())
+	logger.Debugf("opChallenge transaction hash: %s", txHash.String())
 	return nil
 }
 
@@ -267,7 +280,11 @@ func (c *Challenger) executeTick() error {
 	}
 
 	fromBlockNumber, err := c.getFromBlockNumber(latestBlockNumber, period)
-	logger.Debugf("Block number to start with: %d", fromBlockNumber)
+	if err != nil {
+		return fmt.Errorf("failed to get blocknumber from period: %v", err)
+	}
+
+	logger.Debugf("[%v] Block number to start with: %d", c.address, fromBlockNumber)
 
 	pokeLogs, err := c.getOpPokes(fromBlockNumber)
 	if err != nil {
@@ -294,7 +311,7 @@ func (c *Challenger) executeTick() error {
 			logger.Debugf("Event from block %v is not challengeable", poke.BlockNumber)
 			continue
 		}
-		logger.Infof("Challenging OpPoked event from block %v", poke.BlockNumber)
+		logger.Warnf("Challenging OpPoked event from block %v", poke.BlockNumber)
 		err = c.challengeOpPokedEvent(poke)
 		if err != nil {
 			return fmt.Errorf("failed to challenge OpPoked event from block %v with error: %v", poke.BlockNumber, err)
@@ -313,20 +330,103 @@ func (c *Challenger) Run() error {
 		logger.Errorf("Failed to execute tick with error: %v", err)
 	}
 
-	ticker := time.NewTicker(30 * time.Second)
+	logger.Infof("Monitoring contract %v", c.address)
+
+	if c.subscriptionURL == "" { // We poll
+		ticker := time.NewTicker(30 * time.Second)
+
+		for {
+			select {
+			case <-c.ctx.Done():
+				logger.Infof("Terminate challenger")
+				return nil
+
+			case t := <-ticker.C:
+				logger.Debugf("Tick at: %v", t)
+
+				err := c.executeTick()
+				if err != nil {
+					logger.Errorf("Failed to execute tick with error: %v", err)
+				}
+			}
+		}
+	} else { // Event based
+		return c.Listen()
+	}
+}
+
+func (c *Challenger) Listen() error {
+	logger.Infof("Listening for events from %v", c.address)
+	ethcli, err := ethclient.Dial(c.subscriptionURL)
+	if err != nil {
+		return err
+	}
+
+	query := ethereum.FilterQuery{
+		Addresses: []common.Address{common.HexToAddress(c.address.String())},
+	}
+
+	logs := make(chan gethtypes.Log)
+
+	sub, err := ethcli.SubscribeFilterLogs(c.ctx, query, logs)
+	if err != nil {
+		return err
+	}
 
 	for {
 		select {
 		case <-c.ctx.Done():
 			logger.Infof("Terminate challenger")
 			return nil
+		case err := <-sub.Err():
+			return err
+		case evlog := <-logs:
+			if evlog.Topics[0].Hex() != OPPOKED_EVENT_SIG {
+				logger.Infof("Event occurred, but is not 'opPoked': %s", evlog.Topics[0].Hex())
+				continue
+			}
 
-		case t := <-ticker.C:
-			logger.Debugf("Tick at: %v", t)
-
-			err := c.executeTick()
+			// Marshal go-ethereum data to defiweb types
+			addr, err := types.AddressFromBytes(evlog.Address.Bytes())
 			if err != nil {
-				logger.Errorf("Failed to execute tick with error: %v", err)
+				return err
+			}
+			logger.Infof("opPoked event for %v", addr)
+
+			topics := make([]types.Hash, 0)
+			for _, topic := range evlog.Topics {
+				t, err := types.HashFromBytes(topic.Bytes(), types.PadLeft)
+				if err != nil {
+					return err
+				}
+				topics = append(topics, t)
+			}
+			log := types.Log{
+				Address:     addr,
+				Topics:      topics,
+				Data:        evlog.Data,
+				BlockNumber: new(big.Int).SetUint64(evlog.BlockNumber),
+			}
+
+			poke, err := c.decodeOpPoke(log)
+			if err != nil {
+				return err
+			}
+
+			period, err := c.getChallengePeriod()
+			if err != nil {
+				return fmt.Errorf("failed to get challenge period with error: %v", err)
+			}
+
+			if c.isPokeChallengeable(poke, period) {
+				logger.Warnf("Challenging opPoke sent from %v", common.BytesToAddress(evlog.Topics[1].Bytes()))
+				err = c.challengeOpPokedEvent(poke)
+				if err != nil {
+					return fmt.Errorf(
+						"failed to challenge OpPoked event from block %v with error: %v", poke.BlockNumber, err)
+				}
+			} else {
+				logger.Debugf("Event from block %v is not challengeable", poke.BlockNumber)
 			}
 		}
 	}
@@ -362,7 +462,6 @@ func pickUnchallengedPokes(pokes []*OpPokedEvent, challenges []*OpPokeChallenged
 	sort.Slice(sortable, func(i, j int) bool {
 		return sortable[i].GetBlockNumber().Cmp(sortable[j].GetBlockNumber()) == -1
 	})
-	fmt.Println(sortable)
 	for i, event := range sortable {
 		switch event.(type) {
 		case *OpPokedEvent:

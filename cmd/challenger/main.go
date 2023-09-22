@@ -42,14 +42,15 @@ const (
 var contractABI []byte
 
 type options struct {
-	SecretKey    string
-	Key          string
-	Password     string
-	PasswordFile string
-	RpcURL       string
-	Address      []string
-	FromBlock    uint64
-	ChainID      uint64
+	SecretKey       string
+	Key             string
+	Password        string
+	PasswordFile    string
+	RpcURL          string
+	SubscriptionURL string
+	Address         []string
+	FromBlock       uint64
+	ChainID         uint64
 }
 
 // Checks and return private key based on given options
@@ -167,7 +168,9 @@ func main() {
 			for _, address := range addresses {
 				wg.Add(1)
 
-				c := challenger.NewChallenger(ctx, address, contract, 0, client, &wg)
+				c := challenger.NewChallenger(ctx,
+					address, contract, 0, opts.SubscriptionURL, client, &wg)
+
 				go func() {
 					err := c.Run()
 					if err != nil {
@@ -185,6 +188,7 @@ func main() {
 	cmd.PersistentFlags().StringVar(&opts.Password, "password", "", "Key raw password as text")
 	cmd.PersistentFlags().StringVar(&opts.PasswordFile, "password-file", "", "Path to key password file")
 	cmd.PersistentFlags().StringVar(&opts.RpcURL, "rpc-url", "", "Node HTTP RPC_URL, normally starts with https://****")
+	cmd.PersistentFlags().StringVar(&opts.SubscriptionURL, "subscription-url", "", "[Optional] Used if you want to subscribe to events rather than poll, typically starts with wss://****")
 	cmd.PersistentFlags().StringArrayVarP(&opts.Address, "addresses", "a", []string{}, "ScribeOptimistic contract address. Example: `0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f`")
 	cmd.PersistentFlags().Uint64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
 	cmd.PersistentFlags().Uint64Var(&opts.ChainID, "chain-id", 0, "If no chain_id provided binary will try to get chain_id from given RPC")

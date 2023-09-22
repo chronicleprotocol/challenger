@@ -23,6 +23,7 @@ import (
 	"github.com/defiweb/go-eth/abi"
 	"github.com/defiweb/go-eth/rpc"
 	"github.com/defiweb/go-eth/types"
+	logger "github.com/sirupsen/logrus"
 )
 
 type SortableEvent interface {
@@ -74,6 +75,12 @@ func (o *OpPokedEvent) constructMessage(
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode constructOpPokeMessage result with error: %v", err)
 	}
+	logger.Debugf(
+		"cast call %v 'constructPokeMessage((uint128,uint32))' '(%v,%v)'",
+		address,
+		o.PokeData.Val,
+		o.PokeData.Age,
+	)
 	return message, nil
 }
 
@@ -104,6 +111,14 @@ func (o *OpPokedEvent) checkIsAcceptableShnorrSignature(
 	if err != nil {
 		return false, fmt.Errorf("failed to decode isAcceptableSchnorrSignatureNow result with error: %v", err)
 	}
+	logger.Debugf(
+		"cast call %v 'isAcceptableSchnorrSignatureNow(bytes32,(bytes32,address,bytes))(bool)' %s '(%s,%v,%s)'",
+		address,
+		fmt.Sprintf("0x%x", message),
+		fmt.Sprintf("0x%x", o.Schnorr.Signature),
+		o.Schnorr.Commitment,
+		fmt.Sprintf("0x%x", o.Schnorr.SignersBlob),
+	)
 	return res, nil
 }
 
