@@ -463,16 +463,16 @@ func pickUnchallengedPokes(pokes []*OpPokedEvent, challenges []*OpPokeChallenged
 		return sortable[i].GetBlockNumber().Cmp(sortable[j].GetBlockNumber()) == -1
 	})
 	for i, event := range sortable {
-		switch event.(type) {
+		switch ev := event.(type) {
 		case *OpPokedEvent:
 			if i == len(sortable)-1 {
-				result = append(result, event.(*OpPokedEvent))
+				result = append(result, ev)
 				continue
 			}
 			if len(sortable)-1 > i+1 && sortable[i+1].Name() == "OpPokeChallengedSuccessfullyEvent" {
 				continue
 			}
-			result = append(result, event.(*OpPokedEvent))
+			result = append(result, ev)
 		case *OpPokeChallengedSuccessfullyEvent:
 			continue
 		}
