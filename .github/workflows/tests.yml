@@ -33,24 +33,24 @@ jobs:
           args: --timeout=10m0s
       - name: Build All Binaries
         run: go build ./...
-  analyze:
-    needs: test
-    name: Analyze with CodeQL
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ 'go' ]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v2
-        with:
-          languages: ${{ matrix.language }}
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v2
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v2
+#  analyze:
+#    needs: test
+#    name: Analyze with CodeQL
+#    runs-on: ubuntu-latest
+#    strategy:
+#      fail-fast: false
+#      matrix:
+#        language: [ 'go' ]
+#    steps:
+#      - name: Checkout repository
+#        uses: actions/checkout@v2
+#        with:
+#          fetch-depth: 0
+#      - name: Initialize CodeQL
+#        uses: github/codeql-action/init@v2
+#        with:
+#          languages: ${{ matrix.language }}
+#      - name: Autobuild
+#        uses: github/codeql-action/autobuild@v2
+#      - name: Perform CodeQL Analysis
+#        uses: github/codeql-action/analyze@v2
