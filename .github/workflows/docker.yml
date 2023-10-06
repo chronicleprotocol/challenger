@@ -52,7 +52,7 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
-          file: ./cmd/Dockerfile
+          file: ./Dockerfile
           build-args: |
             APP_VERSION=${{ inputs.version != '' && inputs.version || steps.meta.outputs.version }}
           platforms: linux/amd64,linux/arm64
