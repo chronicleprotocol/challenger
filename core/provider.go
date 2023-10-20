@@ -38,6 +38,14 @@ func NewScribeOptimisticRpcProvider(contract *abi.Contract, client *rpc.Client) 
 	}
 }
 
+func (s *ScribeOptimisticRpcProvider) OpPokedEvent() *abi.Event {
+	return s.contract.Events["OpPoked"]
+}
+
+func (s *ScribeOptimisticRpcProvider) OpPokeChallengedSuccessfullyEvent() *abi.Event {
+	return s.contract.Events["OpPokeChallengedSuccessfully"]
+}
+
 func (s *ScribeOptimisticRpcProvider) GetChallengePeriod(ctx context.Context, address types.Address) (uint16, error) {
 	opChallengePeriod := s.contract.Methods["opChallengePeriod"]
 	calldata, err := opChallengePeriod.EncodeArgs()
@@ -68,7 +76,7 @@ func (s *ScribeOptimisticRpcProvider) GetPokes(
 	fromBlock *big.Int,
 	toBlock *big.Int,
 ) ([]*OpPokedEvent, error) {
-	event := s.contract.Events["OpPoked"]
+	event := s.OpPokedEvent()
 
 	// Fetch logs for OpPoked events.
 	pokeLogs, err := s.client.GetLogs(ctx, types.FilterLogsQuery{
@@ -100,7 +108,7 @@ func (s *ScribeOptimisticRpcProvider) GetSuccessfulChallenges(
 	fromBlock *big.Int,
 	toBlock *big.Int,
 ) ([]*OpPokeChallengedSuccessfullyEvent, error) {
-	event := s.contract.Events["OpPokeChallengedSuccessfully"]
+	event := s.OpPokeChallengedSuccessfullyEvent()
 
 	// Fetch logs for OpPokeChallengedSuccessfully events.
 	challenges, err := s.client.GetLogs(ctx, types.FilterLogsQuery{

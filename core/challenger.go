@@ -25,7 +25,6 @@ import (
 
 	logger "github.com/sirupsen/logrus"
 
-	"github.com/defiweb/go-eth/abi"
 	"github.com/defiweb/go-eth/rpc"
 	"github.com/defiweb/go-eth/types"
 
@@ -46,7 +45,6 @@ type Challenger struct {
 	subscriptionURL    string
 	provider           IScribeOptimisticProvider
 	client             *rpc.Client
-	contract           *abi.Contract
 	lastProcessedBlock *big.Int
 	wg                 *sync.WaitGroup
 }
@@ -55,7 +53,6 @@ func NewChallenger(
 	ctx context.Context,
 	address types.Address,
 	provider IScribeOptimisticProvider,
-	contract *abi.Contract,
 	fromBlock uint64,
 	subscriptionURL string,
 	client *rpc.Client,
@@ -67,7 +64,6 @@ func NewChallenger(
 		provider:        provider,
 		fromBlock:       fromBlock,
 		client:          client,
-		contract:        contract,
 		wg:              wg,
 		subscriptionURL: subscriptionURL,
 	}
@@ -233,7 +229,7 @@ func (c *Challenger) Listen() error {
 		return err
 	}
 
-	opPokedEvent := c.contract.Events["OpPoked"]
+	opPokedEvent := c.provider.OpPokedEvent()
 
 	for {
 		select {

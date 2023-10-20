@@ -170,7 +170,7 @@ func main() {
 
 				p := challenger.NewScribeOptimisticRpcProvider(contract, client)
 				c := challenger.NewChallenger(ctx,
-					address, p, contract, 0, opts.SubscriptionURL, client, &wg)
+					address, p, 0, opts.SubscriptionURL, client, &wg)
 
 				go func() {
 					err := c.Run()

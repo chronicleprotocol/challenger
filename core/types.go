@@ -44,6 +44,12 @@ type SortableEvent interface {
 
 // IScribeOptimisticProvider is the interface for the ScribeOptimistic contract with required functions for challenger.
 type IScribeOptimisticProvider interface {
+	// OpPokedEvent returns the `OpPoked` event from the contract ABI.
+	OpPokedEvent() *abi.Event
+
+	// OpPokeChallengedSuccessfullyEvent returns the `OpPokeChallengedSuccessfully` event from the contract ABI.
+	OpPokeChallengedSuccessfullyEvent() *abi.Event
+
 	// GetChallengePeriod returns the challenge period of the contract.
 	GetChallengePeriod(ctx context.Context, address types.Address) (uint16, error)
 
