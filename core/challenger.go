@@ -218,6 +218,7 @@ func (c *Challenger) Listen() error {
 		return err
 	}
 
+	//nolint:typecheck
 	query := ethereum.FilterQuery{
 		Addresses: []common.Address{common.HexToAddress(c.address.String())},
 	}
