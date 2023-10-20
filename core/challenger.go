@@ -13,7 +13,7 @@
 //  You should have received a copy of the GNU Affero General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-package challenger
+package core
 
 import (
 	"context"
@@ -35,26 +35,16 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-const SLOT_PERIOD_IN_SEC = 12
+const SlotPeriodInSec = 12
 
-const OPPOKED_EVENT_SIG = "0xb9dc937c5e394d0c8f76e0e324500b88251b4c909ddc56232df10e2ea42b3c63"
-
-type PokeData struct {
-	Val *big.Int `abi:"val"` // uint128
-	Age uint32   `abi:"age"` // uint32
-}
-
-type SchnorrData struct {
-	Signature   [32]byte      `abi:"signature"`   // bytes32
-	Commitment  types.Address `abi:"commitment"`  // address
-	SignersBlob []byte        `abi:"signersBlob"` // bytes
-}
+const OpPokedEventSig = "0xb9dc937c5e394d0c8f76e0e324500b88251b4c909ddc56232df10e2ea42b3c63"
 
 type Challenger struct {
 	ctx                context.Context
 	address            types.Address
 	fromBlock          uint64
 	subscriptionURL    string
+	provider           IScribeOptimisticProvider
 	client             *rpc.Client
 	contract           *abi.Contract
 	lastProcessedBlock *big.Int
@@ -64,6 +54,7 @@ type Challenger struct {
 func NewChallenger(
 	ctx context.Context,
 	address types.Address,
+	provider IScribeOptimisticProvider,
 	contract *abi.Contract,
 	fromBlock uint64,
 	subscriptionURL string,
@@ -73,6 +64,7 @@ func NewChallenger(
 	return &Challenger{
 		ctx:             ctx,
 		address:         address,
+		provider:        provider,
 		fromBlock:       fromBlock,
 		client:          client,
 		contract:        contract,
@@ -81,87 +73,12 @@ func NewChallenger(
 	}
 }
 
-func (c *Challenger) getChallengePeriod() (uint16, error) {
-	opChallengePeriod := c.contract.Methods["opChallengePeriod"]
-	calldata, err := opChallengePeriod.EncodeArgs()
-	if err != nil {
-		panic(err)
-	}
-	b, _, err := c.client.Call(c.ctx, types.Call{
-		To:    &c.address,
-		Input: calldata,
-	}, types.LatestBlockNumber)
-
-	if err != nil {
-		return 0, fmt.Errorf("failed to call opChallengePeriod with error: %v", err)
-	}
-
-	// Decode the result.
-	var period uint16
-	err = opChallengePeriod.DecodeValues(b, &period)
-	if err != nil {
-		return 0, fmt.Errorf("failed to decode opChallengePeriod result with error: %v", err)
-	}
-	return period, nil
-}
-
 // Gets earliest block number we can look `OpPoked` events from.
 func (c *Challenger) getEarliestBlockNumber(lastBlock *big.Int, period uint16) (*big.Int, error) {
 	// Calculate earliest block number.
-	blocksPerPeriod := uint64(period) / SLOT_PERIOD_IN_SEC
+	blocksPerPeriod := uint64(period) / SlotPeriodInSec
 	res := big.NewInt(0).Sub(lastBlock, big.NewInt(int64(blocksPerPeriod)))
 	return res, nil
-}
-
-func (c *Challenger) getOpPokes(fromBlock *big.Int) ([]*OpPokedEvent, error) {
-	event := c.contract.Events["OpPoked"]
-
-	// Fetch logs for OpPoked events.
-	pokeLogs, err := c.client.GetLogs(c.ctx, types.FilterLogsQuery{
-		Address:   []types.Address{c.address},
-		FromBlock: types.BlockNumberFromBigIntPtr(fromBlock),
-		Topics:    [][]types.Hash{{event.Topic0()}},
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get OpPoked events with error: %v", err)
-	}
-
-	var result []*OpPokedEvent
-	for _, poke := range pokeLogs {
-		decoded, err := c.decodeOpPoke(poke)
-		if err != nil {
-			logger.Errorf("Failed to decode OpPoked event with error: %v", err)
-			continue
-		}
-		result = append(result, decoded)
-	}
-	return result, nil
-}
-
-func (c *Challenger) getSuccessfulChallenges(fromBlock *big.Int) ([]*OpPokeChallengedSuccessfullyEvent, error) {
-	event := c.contract.Events["OpPokeChallengedSuccessfully"]
-
-	// Fetch logs for OpPokeChallengedSuccessfully events.
-	challenges, err := c.client.GetLogs(c.ctx, types.FilterLogsQuery{
-		Address:   []types.Address{c.address},
-		FromBlock: types.BlockNumberFromBigIntPtr(fromBlock),
-		Topics:    [][]types.Hash{{event.Topic0()}},
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get OpPokeChallengedSuccessfully events with error: %v", err)
-	}
-	var result []*OpPokeChallengedSuccessfullyEvent
-	for _, challenge := range challenges {
-		decoded, err := c.decodeOpPokeChallengedSuccessfully(challenge)
-		if err != nil {
-			logger.Errorf("Failed to decode OpPokeChallengedSuccessfully event with error: %v", err)
-			continue
-		}
-		result = append(result, decoded)
-	}
-	return result, nil
 }
 
 func (c *Challenger) getFromBlockNumber(latestBlockNumber *big.Int, period uint16) (*big.Int, error) {
@@ -180,44 +97,9 @@ func (c *Challenger) getFromBlockNumber(latestBlockNumber *big.Int, period uint1
 	return earliestBlockNumber, nil
 }
 
-func (c *Challenger) decodeOpPoke(log types.Log) (*OpPokedEvent, error) {
-	event := c.contract.Events["OpPoked"]
-
-	var schnorrData SchnorrData
-	var pokeData PokeData
-	var caller, opFeed types.Address
-	// OpPoked(address,address,(bytes32,address,bytes),(uint128,uint32))
-	err := event.DecodeValues(log.Topics, log.Data, &caller, &opFeed, &schnorrData, &pokeData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode event data with error: %v\n", err)
-	}
-	return &OpPokedEvent{
-		BlockNumber: log.BlockNumber,
-		Caller:      caller,
-		OpFeed:      opFeed,
-		Schnorr:     schnorrData,
-		PokeData:    pokeData,
-	}, nil
-}
-
-func (c *Challenger) decodeOpPokeChallengedSuccessfully(log types.Log) (*OpPokeChallengedSuccessfullyEvent, error) {
-	event := c.contract.Events["OpPokeChallengedSuccessfully"]
-
-	var challenger types.Address
-	var b []byte
-	err := event.DecodeValues(log.Topics, log.Data, &challenger, &b)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode event data with error: %v\n", err)
-	}
-	return &OpPokeChallengedSuccessfullyEvent{
-		BlockNumber: log.BlockNumber,
-		Challenger:  challenger,
-	}, nil
-}
-
 func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uint16) bool {
 	if poke == nil || poke.BlockNumber == nil {
-		logger.Info("Poke or blocknumber is nil")
+		logger.Info("OpPoked or block number is nil")
 		return false
 	}
 	block, err := c.client.BlockByNumber(c.ctx, types.BlockNumberFromBigInt(poke.BlockNumber), false)
@@ -225,46 +107,23 @@ func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uin
 		logger.Errorf("Failed to get block by number %d with error: %v", poke.BlockNumber, err)
 		return false
 	}
-	challengeableFrom := time.Now().Add(-time.Second * time.Duration(challengePeriod))
+	challengeableSince := time.Now().Add(-time.Second * time.Duration(challengePeriod))
 
 	// Not challengeable by time
-	if block.Timestamp.Before(challengeableFrom) {
-		logger.Infof("Not challengeable by time %v", challengeableFrom)
+	if block.Timestamp.Before(challengeableSince) {
+		logger.Infof("Not challengeable by time %v", challengeableSince)
 		return false
 	}
 
-	valid, err := poke.IsSignatureValid(c.ctx, c.client, c.contract, c.address)
+	valid, err := c.provider.IsPokeSignatureValid(c.ctx, c.address, poke)
 	if err != nil {
-		logger.Errorf("Failed to check if signature is valid with error: %v", err)
+		logger.Errorf("Failed to verify OpPoked signature with error: %v", err)
 		return false
 	}
 	logger.Infof("Is opPoke signature valid? %v", valid)
 
 	// Only challengeable if signature is not valid
 	return !valid
-}
-
-func (c *Challenger) challengeOpPokedEvent(event *OpPokedEvent) error {
-	opChallenge := c.contract.Methods["opChallenge"]
-
-	calldata, err := opChallenge.EncodeArgs(event.Schnorr)
-	if err != nil {
-		return fmt.Errorf("failed to encode opChallenge args: %v", err)
-	}
-
-	// Prepare a transaction.
-	tx := (&types.Transaction{}).
-		SetTo(c.address).
-		SetInput(calldata)
-
-	txHash, _, err := c.client.SendTransaction(c.ctx, *tx)
-	if err != nil {
-		return fmt.Errorf("failed to send opChallenge transaction with error: %v", err)
-	}
-
-	// Print the transaction hash.
-	logger.Debugf("opChallenge transaction hash: %s", txHash.String())
-	return nil
 }
 
 func (c *Challenger) executeTick() error {
@@ -274,7 +133,7 @@ func (c *Challenger) executeTick() error {
 	}
 
 	// Fetching challenge period.
-	period, err := c.getChallengePeriod()
+	period, err := c.provider.GetChallengePeriod(c.ctx, c.address)
 	if err != nil {
 		return fmt.Errorf("failed to get challenge period with error: %v", err)
 	}
@@ -286,7 +145,7 @@ func (c *Challenger) executeTick() error {
 
 	logger.Debugf("[%v] Block number to start with: %d", c.address, fromBlockNumber)
 
-	pokeLogs, err := c.getOpPokes(fromBlockNumber)
+	pokeLogs, err := c.provider.GetPokes(c.ctx, c.address, fromBlockNumber, latestBlockNumber)
 	if err != nil {
 		return fmt.Errorf("failed to get OpPoked events with error: %v", err)
 	}
@@ -299,12 +158,12 @@ func (c *Challenger) executeTick() error {
 		return nil
 	}
 
-	challenges, err := c.getSuccessfulChallenges(fromBlockNumber)
+	challenges, err := c.provider.GetSuccessfulChallenges(c.ctx, c.address, fromBlockNumber, latestBlockNumber)
 	if err != nil {
 		return fmt.Errorf("failed to get OpPokeChallengedSuccessfully events with error: %v", err)
 	}
 	// Filtering out pokes that were already challenged.
-	pokes := pickUnchallengedPokes(pokeLogs, challenges)
+	pokes := PickUnchallengedPokes(pokeLogs, challenges)
 
 	for _, poke := range pokes {
 		if !c.isPokeChallengeable(poke, period) {
@@ -312,10 +171,11 @@ func (c *Challenger) executeTick() error {
 			continue
 		}
 		logger.Warnf("Challenging OpPoked event from block %v", poke.BlockNumber)
-		err = c.challengeOpPokedEvent(poke)
+		txHash, _, err := c.provider.ChallengePoke(c.ctx, c.address, poke)
 		if err != nil {
 			return fmt.Errorf("failed to challenge OpPoked event from block %v with error: %v", poke.BlockNumber, err)
 		}
+		logger.Infof("Challenge transaction hash: %v", txHash.String())
 	}
 
 	return nil
@@ -373,6 +233,8 @@ func (c *Challenger) Listen() error {
 		return err
 	}
 
+	opPokedEvent := c.contract.Events["OpPoked"]
+
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -381,7 +243,7 @@ func (c *Challenger) Listen() error {
 		case err := <-sub.Err():
 			return err
 		case evlog := <-logs:
-			if evlog.Topics[0].Hex() != OPPOKED_EVENT_SIG {
+			if evlog.Topics[0].Hex() != OpPokedEventSig {
 				logger.Infof("Event occurred, but is not 'opPoked': %s", evlog.Topics[0].Hex())
 				continue
 			}
@@ -408,23 +270,24 @@ func (c *Challenger) Listen() error {
 				BlockNumber: new(big.Int).SetUint64(evlog.BlockNumber),
 			}
 
-			poke, err := c.decodeOpPoke(log)
+			poke, err := DecodeOpPokeEvent(opPokedEvent, log)
 			if err != nil {
 				return err
 			}
 
-			period, err := c.getChallengePeriod()
+			period, err := c.provider.GetChallengePeriod(c.ctx, c.address)
 			if err != nil {
 				return fmt.Errorf("failed to get challenge period with error: %v", err)
 			}
 
 			if c.isPokeChallengeable(poke, period) {
 				logger.Warnf("Challenging opPoke sent from %v", common.BytesToAddress(evlog.Topics[1].Bytes()))
-				err = c.challengeOpPokedEvent(poke)
+				txHash, _, err := c.provider.ChallengePoke(c.ctx, c.address, poke)
 				if err != nil {
 					return fmt.Errorf(
 						"failed to challenge OpPoked event from block %v with error: %v", poke.BlockNumber, err)
 				}
+				logger.Infof("Challenge transaction hash: %v", txHash.String())
 			} else {
 				logger.Debugf("Event from block %v is not challengeable", poke.BlockNumber)
 			}
@@ -432,13 +295,10 @@ func (c *Challenger) Listen() error {
 	}
 }
 
-// Checks if `OpPoked` event has `OpPokeChallengedSuccessfully` event after it and before next `OpPoked` event.
+// PickUnchallengedPokes Checks if `OpPoked` event has `OpPokeChallengedSuccessfully` event after it and before next `OpPoked` event.
 // If it does, then we don't need to challenge it.
-func pickUnchallengedPokes(pokes []*OpPokedEvent, challenges []*OpPokeChallengedSuccessfullyEvent) []*OpPokedEvent {
-	if len(challenges) == 0 {
-		return pokes
-	}
-	if len(pokes) == 0 {
+func PickUnchallengedPokes(pokes []*OpPokedEvent, challenges []*OpPokeChallengedSuccessfullyEvent) []*OpPokedEvent {
+	if len(pokes) == 0 || len(challenges) == 0 {
 		return pokes
 	}
 
