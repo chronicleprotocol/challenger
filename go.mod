@@ -1,9 +1,8 @@
-module challenger
+module github.com/chronicleprotocol/challenger
 
 go 1.20
 
 require (
-	github.com/davecgh/go-spew v1.1.1
 	github.com/defiweb/go-eth v0.4.3
 	github.com/ethereum/go-ethereum v1.13.1
 	github.com/sirupsen/logrus v1.9.3

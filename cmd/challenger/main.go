@@ -16,13 +16,13 @@
 package main
 
 import (
-	"challenger/pkg/challenger"
 	"context"
 	_ "embed"
 	"fmt"
 	"os"
 	"sync"
 
+	challenger "github.com/chronicleprotocol/challenger/core"
 	"github.com/defiweb/go-eth/abi"
 	"github.com/defiweb/go-eth/wallet"
 	logger "github.com/sirupsen/logrus"
@@ -168,8 +168,9 @@ func main() {
 			for _, address := range addresses {
 				wg.Add(1)
 
+				p := challenger.NewScribeOptimisticRpcProvider(contract, client)
 				c := challenger.NewChallenger(ctx,
-					address, contract, 0, opts.SubscriptionURL, client, &wg)
+					address, p, 0, opts.SubscriptionURL, client, &wg)
 
 				go func() {
 					err := c.Run()
