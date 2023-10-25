@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/defiweb/go-eth/abi"
 	"github.com/defiweb/go-eth/types"
 )
 
@@ -44,11 +43,11 @@ type SortableEvent interface {
 
 // IScribeOptimisticProvider is the interface for the ScribeOptimistic contract with required functions for challenger.
 type IScribeOptimisticProvider interface {
-	// OpPokedEvent returns the `OpPoked` event from the contract ABI.
-	OpPokedEvent() *abi.Event
+	// BlockByNumber returns the block details by the given block number.
+	BlockByNumber(ctx context.Context, blockNumber *big.Int) (*types.Block, error)
 
-	// OpPokeChallengedSuccessfullyEvent returns the `OpPokeChallengedSuccessfully` event from the contract ABI.
-	OpPokeChallengedSuccessfullyEvent() *abi.Event
+	// BlockNumber returns the current block number.
+	BlockNumber(ctx context.Context) (*big.Int, error)
 
 	// GetChallengePeriod returns the challenge period of the contract.
 	GetChallengePeriod(ctx context.Context, address types.Address) (uint16, error)
@@ -67,12 +66,12 @@ type IScribeOptimisticProvider interface {
 }
 
 // DecodeOpPokeEvent Decodes the OpPoked event from the given log.
-// NOTE: 1st argument must be `OpPoked` event from contract ABI. (`contract.Events["OpPoked"]`)
-func DecodeOpPokeEvent(event *abi.Event, log types.Log) (*OpPokedEvent, error) {
+func DecodeOpPokeEvent(log types.Log) (*OpPokedEvent, error) {
 	var schnorrData SchnorrData
 	var pokeData PokeData
 	var caller, opFeed types.Address
 
+	event := ScribeOptimisticContractABI.Events["OpPoked"]
 	// OpPoked(address,address,(bytes32,address,bytes),(uint128,uint32))
 	err := event.DecodeValues(log.Topics, log.Data, &caller, &opFeed, &schnorrData, &pokeData)
 	if err != nil {
@@ -88,10 +87,12 @@ func DecodeOpPokeEvent(event *abi.Event, log types.Log) (*OpPokedEvent, error) {
 }
 
 // DecodeOpPokeChallengedSuccessfullyEvent Decodes the OpPokeChallengedSuccessfully event from the given log.
-// NOTE: 1st argument must be `OpPokeChallengedSuccessfully` event from contract ABI. (`contract.Events["OpPokeChallengedSuccessfully"]`)
-func DecodeOpPokeChallengedSuccessfullyEvent(event *abi.Event, log types.Log) (*OpPokeChallengedSuccessfullyEvent, error) {
+func DecodeOpPokeChallengedSuccessfullyEvent(log types.Log) (*OpPokeChallengedSuccessfullyEvent, error) {
 	var challenger types.Address
 	var b []byte
+
+	event := ScribeOptimisticContractABI.Events["OpPokeChallengedSuccessfully"]
+
 	err := event.DecodeValues(log.Topics, log.Data, &challenger, &b)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode event data with error: %v\n", err)
