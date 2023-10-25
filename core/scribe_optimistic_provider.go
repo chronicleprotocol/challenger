@@ -17,6 +17,7 @@ package core
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"math/big"
 
@@ -26,28 +27,35 @@ import (
 	logger "github.com/sirupsen/logrus"
 )
 
+//go:embed ScribeOptimistic.json
+var scribeOptimisticContractJSON []byte
+
+// ScribeOptimisticContractABI contains parsed contract ABI.
+var ScribeOptimisticContractABI = abi.MustParseJSON(scribeOptimisticContractJSON)
+
+// ScribeOptimisticRpcProvider implements IScribeOptimisticProvider interface and provides functionality to interact with ScribeOptimistic contract.
 type ScribeOptimisticRpcProvider struct {
-	client   *rpc.Client
-	contract *abi.Contract
+	client *rpc.Client
 }
 
-func NewScribeOptimisticRpcProvider(contract *abi.Contract, client *rpc.Client) *ScribeOptimisticRpcProvider {
+// NewScribeOptimisticRpcProvider creates a new instance of ScribeOptimisticRpcProvider.
+func NewScribeOptimisticRpcProvider(client *rpc.Client) *ScribeOptimisticRpcProvider {
 	return &ScribeOptimisticRpcProvider{
-		contract: contract,
-		client:   client,
+		client: client,
 	}
 }
 
-func (s *ScribeOptimisticRpcProvider) OpPokedEvent() *abi.Event {
-	return s.contract.Events["OpPoked"]
+func (s *ScribeOptimisticRpcProvider) BlockByNumber(ctx context.Context, blockNumber *big.Int) (*types.Block, error) {
+	return s.client.BlockByNumber(ctx, types.BlockNumberFromBigInt(blockNumber), false)
 }
 
-func (s *ScribeOptimisticRpcProvider) OpPokeChallengedSuccessfullyEvent() *abi.Event {
-	return s.contract.Events["OpPokeChallengedSuccessfully"]
+func (s *ScribeOptimisticRpcProvider) BlockNumber(ctx context.Context) (*big.Int, error) {
+	return s.client.BlockNumber(ctx)
 }
 
+// GetChallengePeriod returns the challenge period of the contract using call.
 func (s *ScribeOptimisticRpcProvider) GetChallengePeriod(ctx context.Context, address types.Address) (uint16, error) {
-	opChallengePeriod := s.contract.Methods["opChallengePeriod"]
+	opChallengePeriod := ScribeOptimisticContractABI.Methods["opChallengePeriod"]
 	calldata, err := opChallengePeriod.EncodeArgs()
 	if err != nil {
 		panic(err)
@@ -70,13 +78,14 @@ func (s *ScribeOptimisticRpcProvider) GetChallengePeriod(ctx context.Context, ad
 	return period, nil
 }
 
+// GetPokes returns list of the `OpPoked` events within the given block range under `address`.
 func (s *ScribeOptimisticRpcProvider) GetPokes(
 	ctx context.Context,
 	address types.Address,
 	fromBlock *big.Int,
 	toBlock *big.Int,
 ) ([]*OpPokedEvent, error) {
-	event := s.OpPokedEvent()
+	event := ScribeOptimisticContractABI.Events["OpPoked"]
 
 	// Fetch logs for OpPoked events.
 	pokeLogs, err := s.client.GetLogs(ctx, types.FilterLogsQuery{
@@ -92,7 +101,7 @@ func (s *ScribeOptimisticRpcProvider) GetPokes(
 
 	var result []*OpPokedEvent
 	for _, poke := range pokeLogs {
-		decoded, err := DecodeOpPokeEvent(event, poke)
+		decoded, err := DecodeOpPokeEvent(poke)
 		if err != nil {
 			logger.Errorf("Failed to decode OpPoked event with error: %v", err)
 			continue
@@ -102,13 +111,14 @@ func (s *ScribeOptimisticRpcProvider) GetPokes(
 	return result, nil
 }
 
+// GetSuccessfulChallenges returns list of the `OpPokeChallengedSuccessfully` events within the given block range under `address`.
 func (s *ScribeOptimisticRpcProvider) GetSuccessfulChallenges(
 	ctx context.Context,
 	address types.Address,
 	fromBlock *big.Int,
 	toBlock *big.Int,
 ) ([]*OpPokeChallengedSuccessfullyEvent, error) {
-	event := s.OpPokeChallengedSuccessfullyEvent()
+	event := ScribeOptimisticContractABI.Events["OpPokeChallengedSuccessfully"]
 
 	// Fetch logs for OpPokeChallengedSuccessfully events.
 	challenges, err := s.client.GetLogs(ctx, types.FilterLogsQuery{
@@ -123,7 +133,7 @@ func (s *ScribeOptimisticRpcProvider) GetSuccessfulChallenges(
 	}
 	var result []*OpPokeChallengedSuccessfullyEvent
 	for _, challenge := range challenges {
-		decoded, err := DecodeOpPokeChallengedSuccessfullyEvent(event, challenge)
+		decoded, err := DecodeOpPokeChallengedSuccessfullyEvent(challenge)
 		if err != nil {
 			logger.Errorf("Failed to decode OpPokeChallengedSuccessfully event with error: %v", err)
 			continue
@@ -138,7 +148,7 @@ func (s *ScribeOptimisticRpcProvider) constructPokeMessage(
 	address types.Address,
 	poke *OpPokedEvent,
 ) ([]byte, error) {
-	constructMessage := s.contract.Methods["constructPokeMessage"]
+	constructMessage := ScribeOptimisticContractABI.Methods["constructPokeMessage"]
 	calldata, err := constructMessage.EncodeArgs(poke.PokeData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode constructOpPokeMessage args: %v", err)
@@ -173,7 +183,7 @@ func (s *ScribeOptimisticRpcProvider) isSchnorrSignatureAcceptable(
 	poke *OpPokedEvent,
 	message []byte,
 ) (bool, error) {
-	isAcceptableSignature := s.contract.Methods["isAcceptableSchnorrSignatureNow"]
+	isAcceptableSignature := ScribeOptimisticContractABI.Methods["isAcceptableSchnorrSignatureNow"]
 	calldata, err := isAcceptableSignature.EncodeArgs(message, poke.Schnorr)
 	if err != nil {
 		return false, fmt.Errorf("failed to encode isAcceptableSchnorrSignatureNow args: %v", err)
@@ -204,6 +214,8 @@ func (s *ScribeOptimisticRpcProvider) isSchnorrSignatureAcceptable(
 	return res, nil
 }
 
+// IsPokeSignatureValid returns true if the given poke signature is valid.
+// Signature validation flow described here: https://github.com/chronicleprotocol/scribe/blob/main/docs/Scribe.md#verifying-optimistic-pokes
 func (s *ScribeOptimisticRpcProvider) IsPokeSignatureValid(ctx context.Context, address types.Address, poke *OpPokedEvent) (bool, error) {
 	message, err := s.constructPokeMessage(ctx, address, poke)
 	if err != nil {
@@ -212,8 +224,9 @@ func (s *ScribeOptimisticRpcProvider) IsPokeSignatureValid(ctx context.Context, 
 	return s.isSchnorrSignatureAcceptable(ctx, address, poke, message)
 }
 
+// ChallengePoke challenges the given poke by sending transaction for `opChallenge` contract function.
 func (s *ScribeOptimisticRpcProvider) ChallengePoke(ctx context.Context, address types.Address, poke *OpPokedEvent) (*types.Hash, *types.Transaction, error) {
-	opChallenge := s.contract.Methods["opChallenge"]
+	opChallenge := ScribeOptimisticContractABI.Methods["opChallenge"]
 
 	calldata, err := opChallenge.EncodeArgs(poke.Schnorr)
 	if err != nil {

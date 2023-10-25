@@ -25,7 +25,6 @@ import (
 
 	logger "github.com/sirupsen/logrus"
 
-	"github.com/defiweb/go-eth/rpc"
 	"github.com/defiweb/go-eth/types"
 
 	"github.com/ethereum/go-ethereum"
@@ -34,7 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-const SlotPeriodInSec = 12
+const slotPeriodInSec = 12
 
 const OpPokedEventSig = "0xb9dc937c5e394d0c8f76e0e324500b88251b4c909ddc56232df10e2ea42b3c63"
 
@@ -44,18 +43,17 @@ type Challenger struct {
 	fromBlock          uint64
 	subscriptionURL    string
 	provider           IScribeOptimisticProvider
-	client             *rpc.Client
 	lastProcessedBlock *big.Int
 	wg                 *sync.WaitGroup
 }
 
+// NewChallenger creates a new instance of Challenger.
 func NewChallenger(
 	ctx context.Context,
 	address types.Address,
 	provider IScribeOptimisticProvider,
 	fromBlock uint64,
 	subscriptionURL string,
-	client *rpc.Client,
 	wg *sync.WaitGroup,
 ) *Challenger {
 	return &Challenger{
@@ -63,18 +61,20 @@ func NewChallenger(
 		address:         address,
 		provider:        provider,
 		fromBlock:       fromBlock,
-		client:          client,
 		wg:              wg,
 		subscriptionURL: subscriptionURL,
 	}
 }
 
 // Gets earliest block number we can look `OpPoked` events from.
-func (c *Challenger) getEarliestBlockNumber(lastBlock *big.Int, period uint16) (*big.Int, error) {
+func (c *Challenger) getEarliestBlockNumber(lastBlock *big.Int, period uint16) *big.Int {
 	// Calculate earliest block number.
-	blocksPerPeriod := uint64(period) / SlotPeriodInSec
+	blocksPerPeriod := uint64(period) / slotPeriodInSec
+	if lastBlock.Cmp(big.NewInt(int64(blocksPerPeriod))) == -1 {
+		return big.NewInt(0)
+	}
 	res := big.NewInt(0).Sub(lastBlock, big.NewInt(int64(blocksPerPeriod)))
-	return res, nil
+	return res
 }
 
 func (c *Challenger) getFromBlockNumber(latestBlockNumber *big.Int, period uint16) (*big.Int, error) {
@@ -86,10 +86,7 @@ func (c *Challenger) getFromBlockNumber(latestBlockNumber *big.Int, period uint1
 	}
 
 	// Calculating earliest block number we can try to challenge OpPoked event from.
-	earliestBlockNumber, err := c.getEarliestBlockNumber(latestBlockNumber, period)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get earliest block number with error: %v", err)
-	}
+	earliestBlockNumber := c.getEarliestBlockNumber(latestBlockNumber, period)
 	return earliestBlockNumber, nil
 }
 
@@ -98,7 +95,7 @@ func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uin
 		logger.Info("OpPoked or block number is nil")
 		return false
 	}
-	block, err := c.client.BlockByNumber(c.ctx, types.BlockNumberFromBigInt(poke.BlockNumber), false)
+	block, err := c.provider.BlockByNumber(c.ctx, poke.BlockNumber)
 	if err != nil {
 		logger.Errorf("Failed to get block by number %d with error: %v", poke.BlockNumber, err)
 		return false
@@ -123,7 +120,7 @@ func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uin
 }
 
 func (c *Challenger) executeTick() error {
-	latestBlockNumber, err := c.client.BlockNumber(c.ctx)
+	latestBlockNumber, err := c.provider.BlockNumber(c.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get latest block number with error: %v", err)
 	}
@@ -177,6 +174,8 @@ func (c *Challenger) executeTick() error {
 	return nil
 }
 
+// Run starts the challenger processing loop.
+// If you provide `subscriptionURL` - it will listen for events from WS connection otherwise, it will poll for new events every 30 seconds.
 func (c *Challenger) Run() error {
 	defer c.wg.Done()
 
@@ -211,6 +210,8 @@ func (c *Challenger) Run() error {
 	}
 }
 
+// Listen listens for `OpPoked` events from WS connection and challenges them if they are challengeable.
+// It requires you to provide WS connection to challenger.
 func (c *Challenger) Listen() error {
 	logger.Infof("Listening for events from %v", c.address)
 	ethcli, err := ethclient.Dial(c.subscriptionURL)
@@ -229,8 +230,6 @@ func (c *Challenger) Listen() error {
 	if err != nil {
 		return err
 	}
-
-	opPokedEvent := c.provider.OpPokedEvent()
 
 	for {
 		select {
@@ -267,7 +266,7 @@ func (c *Challenger) Listen() error {
 				BlockNumber: new(big.Int).SetUint64(evlog.BlockNumber),
 			}
 
-			poke, err := DecodeOpPokeEvent(opPokedEvent, log)
+			poke, err := DecodeOpPokeEvent(log)
 			if err != nil {
 				return err
 			}

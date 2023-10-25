@@ -23,7 +23,6 @@ import (
 	"sync"
 
 	challenger "github.com/chronicleprotocol/challenger/core"
-	"github.com/defiweb/go-eth/abi"
 	"github.com/defiweb/go-eth/wallet"
 	logger "github.com/sirupsen/logrus"
 
@@ -37,9 +36,6 @@ import (
 const (
 	defaultGasLimitMultiplier = 1.25
 )
-
-//go:embed ScribeOptimistic.json
-var contractABI []byte
 
 type options struct {
 	SecretKey       string
@@ -161,16 +157,12 @@ func main() {
 				logger.Fatalf("Failed to create RPC client: %v", err)
 			}
 
-			// Getting contract ABI
-			contract := abi.MustParseJSON(contractABI)
-
 			var wg sync.WaitGroup
 			for _, address := range addresses {
 				wg.Add(1)
 
-				p := challenger.NewScribeOptimisticRpcProvider(contract, client)
-				c := challenger.NewChallenger(ctx,
-					address, p, 0, opts.SubscriptionURL, client, &wg)
+				p := challenger.NewScribeOptimisticRpcProvider(client)
+				c := challenger.NewChallenger(ctx, address, p, 0, opts.SubscriptionURL, &wg)
 
 				go func() {
 					err := c.Run()
