@@ -71,6 +71,11 @@ func (s *mockScribeOptimisticProvider) ChallengePoke(ctx context.Context, addres
 	return args.Get(0).(*types.Hash), args.Get(1).(*types.Transaction), args.Error(2)
 }
 
+func (s *mockScribeOptimisticProvider) GetFrom(ctx context.Context) types.Address {
+	args := s.Called(ctx)
+	return args.Get(0).(types.Address)
+}
+
 func TestGetFromBlockNumber(t *testing.T) {
 	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
 	mockedProvider := new(mockScribeOptimisticProvider)

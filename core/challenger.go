@@ -146,6 +146,10 @@ func (c *Challenger) executeTick() error {
 	// Set updated block we processed.
 	c.lastProcessedBlock = latestBlockNumber
 
+	// Fulfill block number in metrics
+	asFloat64, _ := latestBlockNumber.Float64()
+	LastScannedBlockGauge.WithLabelValues(c.address.String(), c.provider.GetFrom(c.ctx).String()).Set(asFloat64)
+
 	if len(pokeLogs) == 0 {
 		logger.Debugf("No logs found")
 		return nil
@@ -169,6 +173,13 @@ func (c *Challenger) executeTick() error {
 			return fmt.Errorf("failed to challenge OpPoked event from block %v with error: %v", poke.BlockNumber, err)
 		}
 		logger.Infof("Challenge transaction hash: %v", txHash.String())
+
+		// Adding metrics
+		ChallengeCounter.WithLabelValues(
+			c.address.String(),
+			c.provider.GetFrom(c.ctx).String(),
+			txHash.String(),
+		).Inc()
 	}
 
 	return nil
@@ -183,6 +194,13 @@ func (c *Challenger) Run() error {
 	err := c.executeTick()
 	if err != nil {
 		logger.Errorf("Failed to execute tick with error: %v", err)
+
+		// Add error to metrics
+		ErrorsCounter.WithLabelValues(
+			c.address.String(),
+			c.provider.GetFrom(c.ctx).String(),
+			err.Error(),
+		).Inc()
 	}
 
 	logger.Infof("Monitoring contract %v", c.address)
@@ -202,6 +220,12 @@ func (c *Challenger) Run() error {
 				err := c.executeTick()
 				if err != nil {
 					logger.Errorf("Failed to execute tick with error: %v", err)
+					// Add error to metrics
+					ErrorsCounter.WithLabelValues(
+						c.address.String(),
+						c.provider.GetFrom(c.ctx).String(),
+						err.Error(),
+					).Inc()
 				}
 			}
 		}

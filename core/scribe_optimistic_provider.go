@@ -45,6 +45,19 @@ func NewScribeOptimisticRpcProvider(client *rpc.Client) *ScribeOptimisticRpcProv
 	}
 }
 
+func (s *ScribeOptimisticRpcProvider) GetFrom(ctx context.Context) types.Address {
+	accs, err := s.client.Accounts(ctx)
+	if err != nil {
+		logger.Errorf("failed to get accounts with error: %v", err)
+		return types.ZeroAddress
+	}
+	if len(accs) == 0 {
+		logger.Errorf("no accounts found")
+		return types.ZeroAddress
+	}
+	return accs[0]
+}
+
 func (s *ScribeOptimisticRpcProvider) BlockByNumber(ctx context.Context, blockNumber *big.Int) (*types.Block, error) {
 	return s.client.BlockByNumber(ctx, types.BlockNumberFromBigInt(blockNumber), false)
 }
