@@ -147,7 +147,7 @@ func (c *Challenger) executeTick() error {
 	c.lastProcessedBlock = latestBlockNumber
 
 	// Fulfill block number in metrics
-	asFloat64, _ := latestBlockNumber.Float64()
+	asFloat64, _ := new(big.Float).SetInt(latestBlockNumber).Float64()
 	LastScannedBlockGauge.WithLabelValues(c.address.String(), c.provider.GetFrom(c.ctx).String()).Set(asFloat64)
 
 	if len(pokeLogs) == 0 {

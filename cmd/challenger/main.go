@@ -171,19 +171,19 @@ func main() {
 				p := challenger.NewScribeOptimisticRpcProvider(client)
 				c := challenger.NewChallenger(ctx, address, p, 0, opts.SubscriptionURL, &wg)
 
-				go func() {
+				go func(addr types.Address) {
 					err := c.Run()
 					if err != nil {
 						// Add error to metrics
 						challenger.ErrorsCounter.WithLabelValues(
-							address.String(),
+							addr.String(),
 							p.GetFrom(ctx).String(),
 							err.Error(),
 						).Inc()
 
 						logger.Fatalf("Failed to run challenger: %v", err)
 					}
-				}()
+				}(address)
 			}
 
 			go func() {
@@ -195,7 +195,7 @@ func main() {
 				http.Handle("/metrics", promhttp.Handler())
 				// TODO: move `:9090` to config
 				logger.WithError(http.ListenAndServe(":9090", nil)). //nolint:gosec
-					Error("metrics server error")
+											Error("metrics server error")
 				<-ctx.Done()
 			}()
 
