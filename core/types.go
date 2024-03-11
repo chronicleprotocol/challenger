@@ -63,6 +63,9 @@ type IScribeOptimisticProvider interface {
 
 	// ChallengePoke challenges the given poke.
 	ChallengePoke(ctx context.Context, address types.Address, poke *OpPokedEvent) (*types.Hash, *types.Transaction, error)
+
+	// GetFrom returns the address of the challenger account.
+	GetFrom(ctx context.Context) types.Address
 }
 
 // DecodeOpPokeEvent Decodes the OpPoked event from the given log.

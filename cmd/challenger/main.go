@@ -19,7 +19,9 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
 	"sync"
 
 	challenger "github.com/chronicleprotocol/challenger/core"
@@ -30,6 +32,8 @@ import (
 	"github.com/defiweb/go-eth/rpc/transport"
 	"github.com/defiweb/go-eth/txmodifier"
 	"github.com/defiweb/go-eth/types"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 )
 
@@ -121,8 +125,11 @@ func main() {
 
 			// Building context
 			ctx := cmd.Context()
+			var ctxCancel context.CancelFunc
+
 			if ctx == nil {
-				ctx = context.Background()
+				ctx, ctxCancel = signal.NotifyContext(context.Background(), os.Interrupt)
+				defer ctxCancel()
 			}
 
 			t, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.RpcURL})
@@ -164,13 +171,33 @@ func main() {
 				p := challenger.NewScribeOptimisticRpcProvider(client)
 				c := challenger.NewChallenger(ctx, address, p, 0, opts.SubscriptionURL, &wg)
 
-				go func() {
+				go func(addr types.Address) {
 					err := c.Run()
 					if err != nil {
+						// Add error to metrics
+						challenger.ErrorsCounter.WithLabelValues(
+							addr.String(),
+							p.GetFrom(ctx).String(),
+							err.Error(),
+						).Inc()
+
 						logger.Fatalf("Failed to run challenger: %v", err)
 					}
-				}()
+				}(address)
 			}
+
+			go func() {
+				prometheus.MustRegister(
+					challenger.ChallengeCounter,
+					challenger.ErrorsCounter,
+					challenger.LastScannedBlockGauge,
+				)
+				http.Handle("/metrics", promhttp.Handler())
+				// TODO: move `:9090` to config
+				logger.WithError(http.ListenAndServe(":9090", nil)). //nolint:gosec
+											Error("metrics server error")
+				<-ctx.Done()
+			}()
 
 			wg.Wait()
 		},
