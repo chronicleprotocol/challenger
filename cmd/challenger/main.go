@@ -30,7 +30,6 @@ import (
 
 	"github.com/defiweb/go-eth/rpc"
 	"github.com/defiweb/go-eth/rpc/transport"
-	"github.com/defiweb/go-eth/txmodifier"
 	"github.com/defiweb/go-eth/types"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -50,7 +49,6 @@ type options struct {
 	SubscriptionURL string
 	Address         []string
 	FromBlock       uint64
-	ChainID         uint64
 }
 
 // Checks and return private key based on given options
@@ -85,9 +83,6 @@ func (o *options) getKey() (*wallet.PrivateKey, error) {
 		password = string(p)
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to read password file: %v", err)
-	}
 	return wallet.NewKeyFromJSON(o.Key, password)
 }
 
@@ -147,15 +142,6 @@ func main() {
 				rpc.WithTransport(t),
 				rpc.WithKeys(key),
 				rpc.WithDefaultAddress(key.Address()),
-				rpc.WithTXModifiers(
-					txmodifier.NewNonceProvider(false),
-					txmodifier.NewGasLimitEstimator(defaultGasLimitMultiplier, 0, 0),
-					txmodifier.NewLegacyGasFeeEstimator(1, nil, nil),
-				),
-			}
-
-			if opts.ChainID != 0 {
-				clientOptions = append(clientOptions, rpc.WithChainID(opts.ChainID))
 			}
 
 			// Create a JSON-RPC client.
@@ -211,7 +197,6 @@ func main() {
 	cmd.PersistentFlags().StringVar(&opts.SubscriptionURL, "subscription-url", "", "[Optional] Used if you want to subscribe to events rather than poll, typically starts with wss://****")
 	cmd.PersistentFlags().StringArrayVarP(&opts.Address, "addresses", "a", []string{}, "ScribeOptimistic contract address. Example: `0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f`")
 	cmd.PersistentFlags().Uint64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
-	cmd.PersistentFlags().Uint64Var(&opts.ChainID, "chain-id", 0, "If no chain_id provided binary will try to get chain_id from given RPC")
 
 	_ = cmd.Execute()
 }

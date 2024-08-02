@@ -73,7 +73,7 @@ func (s *ScribeOptimisticRpcProvider) GetChallengePeriod(ctx context.Context, ad
 	if err != nil {
 		panic(err)
 	}
-	b, _, err := s.client.Call(ctx, types.Call{
+	b, _, err := s.client.Call(ctx, &types.Call{
 		To:    &address,
 		Input: calldata,
 	}, types.LatestBlockNumber)
@@ -101,7 +101,7 @@ func (s *ScribeOptimisticRpcProvider) GetPokes(
 	event := ScribeOptimisticContractABI.Events["OpPoked"]
 
 	// Fetch logs for OpPoked events.
-	pokeLogs, err := s.client.GetLogs(ctx, types.FilterLogsQuery{
+	pokeLogs, err := s.client.GetLogs(ctx, &types.FilterLogsQuery{
 		Address:   []types.Address{address},
 		FromBlock: types.BlockNumberFromBigIntPtr(fromBlock),
 		ToBlock:   types.BlockNumberFromBigIntPtr(toBlock),
@@ -134,7 +134,7 @@ func (s *ScribeOptimisticRpcProvider) GetSuccessfulChallenges(
 	event := ScribeOptimisticContractABI.Events["OpPokeChallengedSuccessfully"]
 
 	// Fetch logs for OpPokeChallengedSuccessfully events.
-	challenges, err := s.client.GetLogs(ctx, types.FilterLogsQuery{
+	challenges, err := s.client.GetLogs(ctx, &types.FilterLogsQuery{
 		Address:   []types.Address{address},
 		FromBlock: types.BlockNumberFromBigIntPtr(fromBlock),
 		ToBlock:   types.BlockNumberFromBigIntPtr(toBlock),
@@ -166,7 +166,7 @@ func (s *ScribeOptimisticRpcProvider) constructPokeMessage(
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode constructOpPokeMessage args: %v", err)
 	}
-	b, _, err := s.client.Call(ctx, types.Call{
+	b, _, err := s.client.Call(ctx, &types.Call{
 		To:    &address,
 		Input: calldata,
 	}, types.LatestBlockNumber)
@@ -201,7 +201,7 @@ func (s *ScribeOptimisticRpcProvider) isSchnorrSignatureAcceptable(
 	if err != nil {
 		return false, fmt.Errorf("failed to encode isAcceptableSchnorrSignatureNow args: %v", err)
 	}
-	b, _, err := s.client.Call(ctx, types.Call{
+	b, _, err := s.client.Call(ctx, &types.Call{
 		To:    &address,
 		Input: calldata,
 	}, types.LatestBlockNumber)
@@ -251,5 +251,5 @@ func (s *ScribeOptimisticRpcProvider) ChallengePoke(ctx context.Context, address
 		SetTo(address).
 		SetInput(calldata)
 
-	return s.client.SendTransaction(ctx, *tx)
+	return s.client.SendTransaction(ctx, tx)
 }
