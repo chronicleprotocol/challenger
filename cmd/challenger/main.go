@@ -19,6 +19,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -51,7 +52,16 @@ type options struct {
 	Address         []string
 	FromBlock       uint64
 	ChainID         uint64
+	TransactionType string
 }
+
+var (
+	maxGasLimit              = uint64(0)
+	maxGasFee                = (*big.Int)(nil)
+	maxGasPriorityFee        = (*big.Int)(nil)
+	gasFeeMultiplier         = float64(1)
+	gasPriorityFeeMultiplier = float64(1)
+)
 
 // Checks and return private key based on given options
 func (o *options) getKey() (*wallet.PrivateKey, error) {
@@ -143,15 +153,12 @@ func main() {
 			// Basic TX modifiers
 			txModifiers := []rpc.TXModifier{
 				txmodifier.NewGasLimitEstimator(txmodifier.GasLimitEstimatorOptions{
-					MaxGas:     uint64(0),
+					MaxGas:     maxGasLimit,
 					Multiplier: defaultGasLimitMultiplier,
 				}),
 				txmodifier.NewNonceProvider(txmodifier.NonceProviderOptions{
 					UsePendingBlock: false,
 					Replace:         false,
-				}),
-				txmodifier.NewLegacyGasFeeEstimator(txmodifier.LegacyGasFeeEstimatorOptions{
-					Multiplier: 1.0,
 				}),
 			}
 			// Chain ID validation
@@ -161,6 +168,30 @@ func main() {
 					Replace: false,
 					Cache:   true,
 				}))
+			}
+
+			switch opts.TransactionType {
+			case "legacy":
+				txModifiers = append(txModifiers, txmodifier.NewLegacyGasFeeEstimator(txmodifier.LegacyGasFeeEstimatorOptions{
+					Multiplier:  gasFeeMultiplier,
+					MinGasPrice: nil,
+					MaxGasPrice: maxGasFee,
+					Replace:     false,
+				}))
+			case "eip1559":
+				txModifiers = append(txModifiers, txmodifier.NewEIP1559GasFeeEstimator(txmodifier.EIP1559GasFeeEstimatorOptions{
+					GasPriceMultiplier:          gasFeeMultiplier,
+					PriorityFeePerGasMultiplier: gasPriorityFeeMultiplier,
+					MinGasPrice:                 nil,
+					MaxGasPrice:                 maxGasFee,
+					MinPriorityFeePerGas:        nil,
+					MaxPriorityFeePerGas:        maxGasPriorityFee,
+					Replace:                     false,
+				}))
+			case "", "none":
+				// Do nothing
+			default:
+				logger.Fatalf("Unknown transaction type: %s. Have to be legacy, eip1559 or none", opts.TransactionType)
 			}
 
 			clientOptions := []rpc.ClientOptions{
@@ -224,6 +255,7 @@ func main() {
 	cmd.PersistentFlags().StringArrayVarP(&opts.Address, "addresses", "a", []string{}, "ScribeOptimistic contract address. Example: `0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f`")
 	cmd.PersistentFlags().Uint64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
 	cmd.PersistentFlags().Uint64Var(&opts.ChainID, "chain-id", 0, "If no chain_id provided binary will try to get chain_id from given RPC")
+	cmd.PersistentFlags().StringVar(&opts.TransactionType, "tx-type", "none", "Transaction type definition, possible values are: `legacy`, `eip1559` or `none`")
 
 	_ = cmd.Execute()
 }
