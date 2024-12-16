@@ -39,6 +39,38 @@ Starting with key file and password
 challenger run -a 0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f --rpc-url http://localhost:3334 --keystore /path/to/key.json --password-file /path/to/file
 ```
 
+## Using Docker image
+
+We provide a Docker image for the Challenger GoLang version. 
+You can use it to run the Challenger without installing GoLang on your machine.
+
+[Docker image](https://github.com/chronicleprotocol/challenger/pkgs/container/challenger-go)
+
+```bash 
+docker pull ghcr.io/chronicleprotocol/challenger-go:latest
+```
+
+To run docker image you can use the following command:
+
+```bash
+docker run -d ghcr.io/chronicleprotocol/challenger-go:latest run -a ADDRESS1 -a ADDRESS2 -a ADDRESS3 --rpc-url http://localhost:3334 --secret-key asdfasdfas --tx-type legacy 
+```
+
+For keystore usage:
+
+```bash
+docker run -d ghcr.io/chronicleprotocol/challenger-go:latest run -a ADDRESS1 -a ADDRESS2 -a ADDRESS3 --rpc-url http://localhost:3334 --keystore /keystore/keystore.json --password-file /password/password.txt --chain-id 1 --tx-type legacy
+```
+
+## Prometheus metrics
+
+By default, Challenger exposes Prometheus metrics on port `9090`.
+You can have access to the metrics by visiting `http://localhost:9090/metrics` in your browser or route it from docker.
+
+```bash
+docker run -d -p 9090:9090 ghcr.io/chronicleprotocol/challenger-go:latest run -a ADDRESS1 -a ADDRESS2 -a ADDRESS3 --rpc-url http://localhost:3334 --secret-key asdfasdfas --tx-type legacy 
+```
+
 ## Building docker image
 
 SERVER_VERSION have to be same as release but without `v`, if release is `v0.0.10` then `SERVER_VERSION=0.0.10`
