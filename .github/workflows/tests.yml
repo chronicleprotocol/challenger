@@ -27,9 +27,9 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
       - name: Linting Code
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.53
+          version: v1.61
           args: --timeout=10m0s
       - name: Build All Binaries
         run: go build ./...
