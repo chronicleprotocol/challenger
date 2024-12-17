@@ -20,7 +20,7 @@ Flags:
       --rpc-url string                                         Node HTTP RPC_URL, normally starts with https://****
       --secret-key 0x******                                    Private key in format 0x****** or `*******`. If provided, no need to use --keystore
       --subscription-url string                                [Optional] Used if you want to subscribe to events rather than poll, typically starts with wss://****
-      --tx-type legacy                                         Transaction type definition, possible values are: legacy, `eip1559` or `none` (default "none")
+      --tx-type legacy                                         Transaction type definition, possible values are: `legacy`, `eip1559` or `none` (default "none")
 ```
 
 Note that in *all* cases you must provide `--rpc-url`, but if you want to use event driven listening instead of polling you also need to provide `--subscription-url`.
