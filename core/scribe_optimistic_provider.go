@@ -18,6 +18,7 @@ package core
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -27,6 +28,10 @@ import (
 	logger "github.com/sirupsen/logrus"
 )
 
+// MaxChallengeRetries is the maximum number of retries to send a transaction.
+// NOTE: first try with flashbots, if it fails, try with mainnet client.
+const MaxChallengeRetries = 6
+
 //go:embed ScribeOptimistic.json
 var scribeOptimisticContractJSON []byte
 
@@ -35,13 +40,17 @@ var ScribeOptimisticContractABI = abi.MustParseJSON(scribeOptimisticContractJSON
 
 // ScribeOptimisticRpcProvider implements IScribeOptimisticProvider interface and provides functionality to interact with ScribeOptimistic contract.
 type ScribeOptimisticRpcProvider struct {
-	client *rpc.Client
+	client         *rpc.Client
+	flashbotClient *rpc.Client
 }
 
 // NewScribeOptimisticRpcProvider creates a new instance of ScribeOptimisticRpcProvider.
-func NewScribeOptimisticRpcProvider(client *rpc.Client) *ScribeOptimisticRpcProvider {
+// Two clients are required: one for the mainnet and one for the flashbots relay.
+// Logic is simple, try to send with flashbots first, if it fails, send with the mainnet client.
+func NewScribeOptimisticRpcProvider(client *rpc.Client, flashbotClient *rpc.Client) *ScribeOptimisticRpcProvider {
 	return &ScribeOptimisticRpcProvider{
-		client: client,
+		client:         client,
+		flashbotClient: flashbotClient,
 	}
 }
 
@@ -238,12 +247,13 @@ func (s *ScribeOptimisticRpcProvider) IsPokeSignatureValid(ctx context.Context, 
 }
 
 // ChallengePoke challenges the given poke by sending transaction for `opChallenge` contract function.
+// Makes several attempts to send a transaction, first with flashbots, then with the mainnet client.
 func (s *ScribeOptimisticRpcProvider) ChallengePoke(ctx context.Context, address types.Address, poke *OpPokedEvent) (*types.Hash, *types.Transaction, error) {
 	opChallenge := ScribeOptimisticContractABI.Methods["opChallenge"]
 
 	calldata, err := opChallenge.EncodeArgs(poke.Schnorr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to encode opChallenge args: %v", err)
+		return nil, nil, fmt.Errorf("failed to encode opChallenge args: %w", err)
 	}
 
 	// Prepare a transaction.
@@ -251,5 +261,25 @@ func (s *ScribeOptimisticRpcProvider) ChallengePoke(ctx context.Context, address
 		SetTo(address).
 		SetInput(calldata)
 
-	return s.client.SendTransaction(ctx, tx)
+	var errs []error
+	for i := 0; i < MaxChallengeRetries; i++ {
+		if i <= MaxChallengeRetries/2 {
+			// Try to send with flashbots first.
+			hash, tx, err := s.flashbotClient.SendTransaction(ctx, tx)
+			if err == nil {
+				return hash, tx, nil
+			}
+			errs = append(errs, fmt.Errorf("try: %d failed to send tx with flashbots: %w", i, err))
+		} else {
+			// Try to send with the mainnet client.
+			hash, tx, err := s.client.SendTransaction(ctx, tx)
+			if err == nil {
+				return hash, tx, nil
+			}
+			errs = append(errs, fmt.Errorf("try: %d failed to send tx with mainnet: %w", i, err))
+		}
+		i++
+	}
+
+	return nil, nil, fmt.Errorf("failed to send challenge transaction: %w", errors.Join(errs...))
 }

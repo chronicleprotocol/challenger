@@ -26,13 +26,13 @@ import (
 	"sync"
 
 	challenger "github.com/chronicleprotocol/challenger/core"
-	"github.com/defiweb/go-eth/txmodifier"
-	"github.com/defiweb/go-eth/wallet"
 	logger "github.com/sirupsen/logrus"
 
 	"github.com/defiweb/go-eth/rpc"
 	"github.com/defiweb/go-eth/rpc/transport"
+	"github.com/defiweb/go-eth/txmodifier"
 	"github.com/defiweb/go-eth/types"
+	"github.com/defiweb/go-eth/wallet"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
@@ -48,6 +48,7 @@ type options struct {
 	Password        string
 	PasswordFile    string
 	RpcURL          string
+	FlashbotRpcURL  string
 	SubscriptionURL string
 	Address         []string
 	FromBlock       uint64
@@ -144,6 +145,12 @@ func main() {
 				logger.Fatalf("Failed to create transport: %v", err)
 			}
 
+			// flashbot transport
+			flashbotTransport, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.FlashbotRpcURL})
+			if err != nil {
+				logger.Fatalf("Failed to create transport: %v", err)
+			}
+
 			// Key generation
 			key, err := opts.getKey()
 			if err != nil {
@@ -194,6 +201,7 @@ func main() {
 				logger.Fatalf("Unknown transaction type: %s. Have to be legacy, eip1559 or none", opts.TransactionType)
 			}
 
+			// Create a JSON-RPC client to mainnet.
 			clientOptions := []rpc.ClientOptions{
 				rpc.WithTransport(t),
 				rpc.WithKeys(key),
@@ -201,17 +209,31 @@ func main() {
 				rpc.WithTXModifiers(txModifiers...),
 			}
 
-			// Create a JSON-RPC client.
 			client, err := rpc.NewClient(clientOptions...)
 			if err != nil {
 				logger.Fatalf("Failed to create RPC client: %v", err)
 			}
 
+			// Create a JSON-RPC client to flashbot.
+			// TODO: tx modifiers have to be similar ?
+			flashbotClientOptions := []rpc.ClientOptions{
+				rpc.WithTransport(flashbotTransport),
+				rpc.WithKeys(key),
+				rpc.WithDefaultAddress(key.Address()),
+				rpc.WithTXModifiers(txModifiers...),
+			}
+
+			flashbotClient, err := rpc.NewClient(flashbotClientOptions...)
+			if err != nil {
+				logger.Fatalf("Failed to create RPC client: %v", err)
+			}
+
+			// Spawning "challenger" for each address
 			var wg sync.WaitGroup
 			for _, address := range addresses {
 				wg.Add(1)
 
-				p := challenger.NewScribeOptimisticRpcProvider(client)
+				p := challenger.NewScribeOptimisticRpcProvider(client, flashbotClient)
 				c := challenger.NewChallenger(ctx, address, p, 0, opts.SubscriptionURL, &wg)
 
 				go func(addr types.Address) {
@@ -251,6 +273,7 @@ func main() {
 	cmd.PersistentFlags().StringVar(&opts.Password, "password", "", "Key raw password as text")
 	cmd.PersistentFlags().StringVar(&opts.PasswordFile, "password-file", "", "Path to key password file")
 	cmd.PersistentFlags().StringVar(&opts.RpcURL, "rpc-url", "", "Node HTTP RPC_URL, normally starts with https://****")
+	cmd.PersistentFlags().StringVar(&opts.FlashbotRpcURL, "flashbot-rpc-url", "", "Flashbot Node HTTP RPC_URL, normally starts with https://****")
 	cmd.PersistentFlags().StringVar(&opts.SubscriptionURL, "subscription-url", "", "[Optional] Used if you want to subscribe to events rather than poll, typically starts with wss://****")
 	cmd.PersistentFlags().StringArrayVarP(&opts.Address, "addresses", "a", []string{}, "ScribeOptimistic contract address. Example: `0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f`")
 	cmd.PersistentFlags().Uint64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
