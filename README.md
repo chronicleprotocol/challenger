@@ -12,7 +12,8 @@ Aliases:
 Flags:
   -a, --addresses 0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f   ScribeOptimistic contract address. Example: 0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f
       --chain-id uint                                          If no chain_id provided binary will try to get chain_id from given RPC
-      --from-block uint                                        Block number to start from. If not provided, binary will try to get it from given RPC
+      --flashbot-rpc-url string                                Flashbot Node HTTP RPC_URL, normally starts with https://****
+      --from-block int                                         Block number to start from. If not provided, binary will try to get it from given RPC
   -h, --help                                                   help for run
       --keystore string                                        Keystore file (NOT FOLDER), path to key .json file. If provided, no need to use --secret-key
       --password string                                        Key raw password as text
@@ -20,7 +21,8 @@ Flags:
       --rpc-url string                                         Node HTTP RPC_URL, normally starts with https://****
       --secret-key 0x******                                    Private key in format 0x****** or `*******`. If provided, no need to use --keystore
       --subscription-url string                                [Optional] Used if you want to subscribe to events rather than poll, typically starts with wss://****
-      --tx-type legacy                                         Transaction type definition, possible values are: `legacy`, `eip1559` or `none` (default "none")
+      --tx-type legacy                                         Transaction type definition, possible values are: legacy, `eip1559` or `none` (default "none")
+
 ```
 
 Note that in *all* cases you must provide `--rpc-url`, but if you want to use event driven listening instead of polling you also need to provide `--subscription-url`.

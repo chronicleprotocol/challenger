@@ -51,7 +51,7 @@ type options struct {
 	FlashbotRpcURL  string
 	SubscriptionURL string
 	Address         []string
-	FromBlock       uint64
+	FromBlock       int64
 	ChainID         uint64
 	TransactionType string
 }
@@ -140,17 +140,6 @@ func main() {
 				defer ctxCancel()
 			}
 
-			t, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.RpcURL})
-			if err != nil {
-				logger.Fatalf("Failed to create transport: %v", err)
-			}
-
-			// flashbot transport
-			flashbotTransport, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.FlashbotRpcURL})
-			if err != nil {
-				logger.Fatalf("Failed to create transport: %v", err)
-			}
-
 			// Key generation
 			key, err := opts.getKey()
 			if err != nil {
@@ -159,10 +148,6 @@ func main() {
 
 			// Basic TX modifiers
 			txModifiers := []rpc.TXModifier{
-				txmodifier.NewGasLimitEstimator(txmodifier.GasLimitEstimatorOptions{
-					MaxGas:     maxGasLimit,
-					Multiplier: defaultGasLimitMultiplier,
-				}),
 				txmodifier.NewNonceProvider(txmodifier.NonceProviderOptions{
 					UsePendingBlock: false,
 					Replace:         false,
@@ -202,11 +187,23 @@ func main() {
 			}
 
 			// Create a JSON-RPC client to mainnet.
+			t, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.RpcURL})
+			if err != nil {
+				logger.Fatalf("Failed to create transport: %v", err)
+			}
+
+			// Set manual gas limit for flashbots, they might require more gas.
+			//nolint:gocritic
+			baseTxModifiers := append(txModifiers, txmodifier.NewGasLimitEstimator(txmodifier.GasLimitEstimatorOptions{
+				MaxGas:     maxGasLimit,
+				Multiplier: defaultGasLimitMultiplier,
+			}))
+
 			clientOptions := []rpc.ClientOptions{
 				rpc.WithTransport(t),
 				rpc.WithKeys(key),
 				rpc.WithDefaultAddress(key.Address()),
-				rpc.WithTXModifiers(txModifiers...),
+				rpc.WithTXModifiers(baseTxModifiers...),
 			}
 
 			client, err := rpc.NewClient(clientOptions...)
@@ -215,17 +212,33 @@ func main() {
 			}
 
 			// Create a JSON-RPC client to flashbot.
-			// TODO: tx modifiers have to be similar ?
-			flashbotClientOptions := []rpc.ClientOptions{
-				rpc.WithTransport(flashbotTransport),
-				rpc.WithKeys(key),
-				rpc.WithDefaultAddress(key.Address()),
-				rpc.WithTXModifiers(txModifiers...),
-			}
+			var flashbotClient *rpc.Client
+			if opts.FlashbotRpcURL != "" {
+				flashbotTransport, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.FlashbotRpcURL})
+				if err != nil {
+					logger.Fatalf("Failed to create transport: %v", err)
+				}
 
-			flashbotClient, err := rpc.NewClient(flashbotClientOptions...)
-			if err != nil {
-				logger.Fatalf("Failed to create RPC client: %v", err)
+				// Set manual gas limit for flashbots, they might require more gas.
+				//nolint:gocritic
+				flashbotTxModifiers := append(txModifiers, txmodifier.NewGasLimitEstimator(txmodifier.GasLimitEstimatorOptions{
+					MaxGas:     challenger.MaxFlashbotGasLimit,
+					Multiplier: defaultGasLimitMultiplier,
+					Replace:    false,
+				}))
+
+				// TODO: tx modifiers have to be similar ?
+				flashbotClientOptions := []rpc.ClientOptions{
+					rpc.WithTransport(flashbotTransport),
+					rpc.WithKeys(key),
+					rpc.WithDefaultAddress(key.Address()),
+					rpc.WithTXModifiers(flashbotTxModifiers...),
+				}
+
+				flashbotClient, err = rpc.NewClient(flashbotClientOptions...)
+				if err != nil {
+					logger.Fatalf("Failed to create RPC client: %v", err)
+				}
 			}
 
 			// Spawning "challenger" for each address
@@ -234,7 +247,7 @@ func main() {
 				wg.Add(1)
 
 				p := challenger.NewScribeOptimisticRpcProvider(client, flashbotClient)
-				c := challenger.NewChallenger(ctx, address, p, 0, opts.SubscriptionURL, &wg)
+				c := challenger.NewChallenger(ctx, address, p, opts.FromBlock, opts.SubscriptionURL, &wg)
 
 				go func(addr types.Address) {
 					err := c.Run()
@@ -276,7 +289,8 @@ func main() {
 	cmd.PersistentFlags().StringVar(&opts.FlashbotRpcURL, "flashbot-rpc-url", "", "Flashbot Node HTTP RPC_URL, normally starts with https://****")
 	cmd.PersistentFlags().StringVar(&opts.SubscriptionURL, "subscription-url", "", "[Optional] Used if you want to subscribe to events rather than poll, typically starts with wss://****")
 	cmd.PersistentFlags().StringArrayVarP(&opts.Address, "addresses", "a", []string{}, "ScribeOptimistic contract address. Example: `0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f`")
-	cmd.PersistentFlags().Uint64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
+	cmd.PersistentFlags().
+		Int64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
 	cmd.PersistentFlags().Uint64Var(&opts.ChainID, "chain-id", 0, "If no chain_id provided binary will try to get chain_id from given RPC")
 	cmd.PersistentFlags().StringVar(&opts.TransactionType, "tx-type", "none", "Transaction type definition, possible values are: `legacy`, `eip1559` or `none`")
 

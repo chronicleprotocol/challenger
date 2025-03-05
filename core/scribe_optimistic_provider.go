@@ -18,9 +18,9 @@ package core
 import (
 	"context"
 	_ "embed"
-	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/defiweb/go-eth/abi"
 	"github.com/defiweb/go-eth/rpc"
@@ -28,9 +28,8 @@ import (
 	logger "github.com/sirupsen/logrus"
 )
 
-// MaxChallengeRetries is the maximum number of retries to send a transaction.
-// NOTE: first try with flashbots, if it fails, try with mainnet client.
-const MaxChallengeRetries = 6
+var MaxFlashbotGasLimit = uint64(200000)
+var TxConfirmationTimeout = 5 * time.Minute
 
 //go:embed ScribeOptimistic.json
 var scribeOptimisticContractJSON []byte
@@ -40,8 +39,8 @@ var ScribeOptimisticContractABI = abi.MustParseJSON(scribeOptimisticContractJSON
 
 // ScribeOptimisticRpcProvider implements IScribeOptimisticProvider interface and provides functionality to interact with ScribeOptimistic contract.
 type ScribeOptimisticRpcProvider struct {
-	client         *rpc.Client
-	flashbotClient *rpc.Client
+	client         RpcClient
+	flashbotClient RpcClient
 }
 
 // NewScribeOptimisticRpcProvider creates a new instance of ScribeOptimisticRpcProvider.
@@ -125,7 +124,9 @@ func (s *ScribeOptimisticRpcProvider) GetPokes(
 	for _, poke := range pokeLogs {
 		decoded, err := DecodeOpPokeEvent(poke)
 		if err != nil {
-			logger.Errorf("Failed to decode OpPoked event with error: %v", err)
+			logger.
+				WithField("address", address).
+				Errorf("Failed to decode OpPoked event with error: %v", err)
 			continue
 		}
 		result = append(result, decoded)
@@ -157,7 +158,9 @@ func (s *ScribeOptimisticRpcProvider) GetSuccessfulChallenges(
 	for _, challenge := range challenges {
 		decoded, err := DecodeOpPokeChallengedSuccessfullyEvent(challenge)
 		if err != nil {
-			logger.Errorf("Failed to decode OpPokeChallengedSuccessfully event with error: %v", err)
+			logger.
+				WithField("address", address).
+				Errorf("Failed to decode OpPokeChallengedSuccessfully event with error: %v", err)
 			continue
 		}
 		result = append(result, decoded)
@@ -190,12 +193,14 @@ func (s *ScribeOptimisticRpcProvider) constructPokeMessage(
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode constructOpPokeMessage result with error: %v", err)
 	}
-	logger.Debugf(
-		"cast call %v 'constructPokeMessage((uint128,uint32))' '(%v,%v)'",
-		address,
-		poke.PokeData.Val,
-		poke.PokeData.Age,
-	)
+	logger.
+		WithField("address", address).
+		Debugf(
+			"cast call %v 'constructPokeMessage((uint128,uint32))' '(%v,%v)'",
+			address,
+			poke.PokeData.Val,
+			poke.PokeData.Age,
+		)
 	return message, nil
 }
 
@@ -225,14 +230,18 @@ func (s *ScribeOptimisticRpcProvider) isSchnorrSignatureAcceptable(
 	if err != nil {
 		return false, fmt.Errorf("failed to decode isAcceptableSchnorrSignatureNow result with error: %v", err)
 	}
-	logger.Debugf(
-		"cast call %v 'isAcceptableSchnorrSignatureNow(bytes32,(bytes32,address,bytes))(bool)' %s '(%s,%v,%s)'",
-		address,
-		fmt.Sprintf("0x%x", message),
-		fmt.Sprintf("0x%x", poke.Schnorr.Signature),
-		poke.Schnorr.Commitment,
-		fmt.Sprintf("0x%x", poke.Schnorr.SignersBlob),
-	)
+
+	logger.
+		WithField("address", address).
+		Debugf(
+			"cast call %v 'isAcceptableSchnorrSignatureNow(bytes32,(bytes32,address,bytes))(bool)' %s '(%s,%v,%s)'",
+			address,
+			fmt.Sprintf("0x%x", message),
+			fmt.Sprintf("0x%x", poke.Schnorr.Signature),
+			poke.Schnorr.Commitment,
+			fmt.Sprintf("0x%x", poke.Schnorr.SignersBlob),
+		)
+
 	return res, nil
 }
 
@@ -246,9 +255,12 @@ func (s *ScribeOptimisticRpcProvider) IsPokeSignatureValid(ctx context.Context, 
 	return s.isSchnorrSignatureAcceptable(ctx, address, poke, message)
 }
 
-// ChallengePoke challenges the given poke by sending transaction for `opChallenge` contract function.
-// Makes several attempts to send a transaction, first with flashbots, then with the mainnet client.
-func (s *ScribeOptimisticRpcProvider) ChallengePoke(ctx context.Context, address types.Address, poke *OpPokedEvent) (*types.Hash, *types.Transaction, error) {
+// Sends a transaction for `opChallenge` contract function using the mainnet client.
+func (s *ScribeOptimisticRpcProvider) challengePokeUsingMainnet(
+	ctx context.Context,
+	address types.Address,
+	poke *OpPokedEvent,
+) (*types.Hash, *types.Transaction, error) {
 	opChallenge := ScribeOptimisticContractABI.Methods["opChallenge"]
 
 	calldata, err := opChallenge.EncodeArgs(poke.Schnorr)
@@ -261,25 +273,99 @@ func (s *ScribeOptimisticRpcProvider) ChallengePoke(ctx context.Context, address
 		SetTo(address).
 		SetInput(calldata)
 
-	var errs []error
-	for i := 0; i < MaxChallengeRetries; i++ {
-		if i <= MaxChallengeRetries/2 {
-			// Try to send with flashbots first.
-			hash, tx, err := s.flashbotClient.SendTransaction(ctx, tx)
-			if err == nil {
-				return hash, tx, nil
-			}
-			errs = append(errs, fmt.Errorf("try: %d failed to send tx with flashbots: %w", i, err))
-		} else {
-			// Try to send with the mainnet client.
-			hash, tx, err := s.client.SendTransaction(ctx, tx)
-			if err == nil {
-				return hash, tx, nil
-			}
-			errs = append(errs, fmt.Errorf("try: %d failed to send tx with mainnet: %w", i, err))
-		}
-		i++
+	// Try to send with the mainnet client.
+	hash, tx, err := s.client.SendTransaction(ctx, tx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to send challenge transaction: %w", err)
 	}
 
-	return nil, nil, fmt.Errorf("failed to send challenge transaction: %w", errors.Join(errs...))
+	receipt, err := WaitForTxConfirmation(ctx, s.client, hash, TxConfirmationTimeout)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to wait for challenge transaction confirmation on mainnet: %w", err)
+	}
+
+	logger.
+		WithField("address", address).
+		WithField("txHash", hash).
+		WithField("status", receipt.Status).
+		Infof("challenge transaction confirmed in block %s", receipt.BlockHash)
+
+	return hash, tx, nil
+}
+
+func (s *ScribeOptimisticRpcProvider) challengePokeUsingFlashbots(
+	ctx context.Context,
+	address types.Address,
+	poke *OpPokedEvent,
+) (*types.Hash, *types.Transaction, error) {
+	if s.flashbotClient == nil {
+		return nil, nil, fmt.Errorf("flashbot client is not provided")
+	}
+	opChallenge := ScribeOptimisticContractABI.Methods["opChallenge"]
+
+	calldata, err := opChallenge.EncodeArgs(poke.Schnorr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to encode opChallenge args: %w", err)
+	}
+
+	// Prepare a transaction.
+	tx := (&types.Transaction{}).
+		SetTo(address).
+		SetInput(calldata).
+		// NOTE: for flashbots, we need to set the gas limit manually, and it might be more than normally.
+		SetGasLimit(MaxFlashbotGasLimit)
+
+	// Try to send with the flashbots client.
+	// NOTE: because we have signer keys configured for provider,
+	// it will sign the transaction and send it using `eth_sendRawTransaction`.
+	hash, tx, err := s.flashbotClient.SendTransaction(ctx, tx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to send challenge transaction: %w", err)
+	}
+	logger.
+		WithField("address", address).
+		WithField("txHash", hash).
+		Debugf("flashbots challenge transaction sent, waiting for confirmation")
+
+	receipt, err := WaitForTxConfirmation(ctx, s.flashbotClient, hash, TxConfirmationTimeout)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to wait for challenge transaction confirmation: %w", err)
+	}
+
+	logger.
+		WithField("address", address).
+		WithField("txHash", hash).
+		Infof("challenge transaction confirmed in block %s", receipt.BlockHash)
+	return hash, tx, nil
+}
+
+// ChallengePoke challenges the given poke by sending transaction for `opChallenge` contract function.
+// Makes several attempts to send a transaction, first with flashbots, then with the mainnet client.
+// NOTE: Probably, it's better to run challenge in a separate goroutine and wait for the confirmation.
+func (s *ScribeOptimisticRpcProvider) ChallengePoke(
+	ctx context.Context,
+	address types.Address,
+	poke *OpPokedEvent,
+) (*types.Hash, *types.Transaction, error) {
+	if s.flashbotClient == nil {
+		logger.
+			WithField("address", address).
+			Infof("flashbot client is not provided, trying to send with the mainnet client")
+		return s.challengePokeUsingMainnet(ctx, address, poke)
+	}
+
+	logger.
+		WithField("address", address).
+		Debugf("trying to send transaction with flashbots")
+
+	txHash, tx, err := s.challengePokeUsingFlashbots(ctx, address, poke)
+	if err == nil {
+		return txHash, tx, nil
+	}
+
+	logger.
+		WithField("address", address).
+		Warnf("failed to send transaction with flashbots, trying to send with the mainnet client, error: %v", err)
+
+	return s.challengePokeUsingMainnet(ctx, address, poke)
 }
