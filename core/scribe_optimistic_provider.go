@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/defiweb/go-eth/abi"
-	"github.com/defiweb/go-eth/rpc"
 	"github.com/defiweb/go-eth/types"
 	logger "github.com/sirupsen/logrus"
 )
@@ -43,10 +42,10 @@ type ScribeOptimisticRpcProvider struct {
 	flashbotClient RpcClient
 }
 
-// NewScribeOptimisticRpcProvider creates a new instance of ScribeOptimisticRpcProvider.
+// NewScribeOptimisticRPCProvider creates a new instance of ScribeOptimisticRpcProvider.
 // Two clients are required: one for the mainnet and one for the flashbots relay.
 // Logic is simple, try to send with flashbots first, if it fails, send with the mainnet client.
-func NewScribeOptimisticRpcProvider(client *rpc.Client, flashbotClient *rpc.Client) *ScribeOptimisticRpcProvider {
+func NewScribeOptimisticRPCProvider(client RpcClient, flashbotClient RpcClient) *ScribeOptimisticRpcProvider {
 	return &ScribeOptimisticRpcProvider{
 		client:         client,
 		flashbotClient: flashbotClient,

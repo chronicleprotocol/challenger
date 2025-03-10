@@ -32,13 +32,13 @@ Note that in *all* cases you must provide `--rpc-url`, but if you want to use ev
 Starting with private key
 
 ```bash
-challenger run --addresses 0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f --rpc-url http://localhost:3334 --secret-key 0x******
+challenger run --tx-type eip1559 --addresses 0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f --rpc-url http://localhost:3334 --secret-key 0x******
 ```
 
 Starting with key file and password
 
 ```bash
-challenger run -a 0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f --rpc-url http://localhost:3334 --keystore /path/to/key.json --password-file /path/to/file
+challenger run --tx-type eip1559 -a 0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f --rpc-url http://localhost:3334 --keystore /path/to/key.json --password-file /path/to/file
 ```
 
 ## Using Docker image
@@ -90,5 +90,5 @@ docker run --rm challenger-go
 Full example:
 
 ```bash
-docker run --it --rm --name challenger-go run -a ADDRESS --rpc-url http://localhost:3334 --secret-key asdfasdfas
+docker run --it --rm --name challenger-go run -a ADDRESS --tx-type eip1559 --rpc-url http://localhost:3334 --secret-key asdfasdfas
 ```

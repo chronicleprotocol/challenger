@@ -246,7 +246,7 @@ func main() {
 			for _, address := range addresses {
 				wg.Add(1)
 
-				p := challenger.NewScribeOptimisticRpcProvider(client, flashbotClient)
+				p := challenger.NewScribeOptimisticRPCProvider(client, flashbotClient)
 				c := challenger.NewChallenger(ctx, address, p, opts.FromBlock, opts.SubscriptionURL, &wg)
 
 				go func(addr types.Address) {
@@ -272,8 +272,9 @@ func main() {
 				)
 				http.Handle("/metrics", promhttp.Handler())
 				// TODO: move `:9090` to config
-				logger.WithError(http.ListenAndServe(":9090", nil)). //nolint:gosec
-											Error("metrics server error")
+				logger.
+					WithError(http.ListenAndServe(":9090", nil)). //nolint:gosec
+					Error("metrics server error")
 				<-ctx.Done()
 			}()
 
