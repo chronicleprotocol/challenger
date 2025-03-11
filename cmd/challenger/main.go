@@ -48,7 +48,7 @@ type options struct {
 	Password        string
 	PasswordFile    string
 	RpcURL          string
-	FlashbotRpcURL  string
+	FlashbotRPCURL  string
 	SubscriptionURL string
 	Address         []string
 	FromBlock       int64
@@ -213,8 +213,8 @@ func main() {
 
 			// Create a JSON-RPC client to flashbot.
 			var flashbotClient *rpc.Client
-			if opts.FlashbotRpcURL != "" {
-				flashbotTransport, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.FlashbotRpcURL})
+			if opts.FlashbotRPCURL != "" {
+				flashbotTransport, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.FlashbotRPCURL})
 				if err != nil {
 					logger.Fatalf("Failed to create transport: %v", err)
 				}
@@ -287,7 +287,7 @@ func main() {
 	cmd.PersistentFlags().StringVar(&opts.Password, "password", "", "Key raw password as text")
 	cmd.PersistentFlags().StringVar(&opts.PasswordFile, "password-file", "", "Path to key password file")
 	cmd.PersistentFlags().StringVar(&opts.RpcURL, "rpc-url", "", "Node HTTP RPC_URL, normally starts with https://****")
-	cmd.PersistentFlags().StringVar(&opts.FlashbotRpcURL, "flashbot-rpc-url", "", "Flashbot Node HTTP RPC_URL, normally starts with https://****")
+	cmd.PersistentFlags().StringVar(&opts.FlashbotRPCURL, "flashbot-rpc-url", "", "Flashbot Node HTTP RPC_URL, normally starts with https://****")
 	cmd.PersistentFlags().StringVar(&opts.SubscriptionURL, "subscription-url", "", "[Optional] Used if you want to subscribe to events rather than poll, typically starts with wss://****")
 	cmd.PersistentFlags().StringArrayVarP(&opts.Address, "addresses", "a", []string{}, "ScribeOptimistic contract address. Example: `0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f`")
 	cmd.PersistentFlags().

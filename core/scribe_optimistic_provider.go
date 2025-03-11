@@ -38,14 +38,14 @@ var ScribeOptimisticContractABI = abi.MustParseJSON(scribeOptimisticContractJSON
 
 // ScribeOptimisticRpcProvider implements IScribeOptimisticProvider interface and provides functionality to interact with ScribeOptimistic contract.
 type ScribeOptimisticRpcProvider struct {
-	client         RpcClient
-	flashbotClient RpcClient
+	client         RPCClient
+	flashbotClient RPCClient
 }
 
 // NewScribeOptimisticRPCProvider creates a new instance of ScribeOptimisticRpcProvider.
 // Two clients are required: one for the mainnet and one for the flashbots relay.
 // Logic is simple, try to send with flashbots first, if it fails, send with the mainnet client.
-func NewScribeOptimisticRPCProvider(client RpcClient, flashbotClient RpcClient) *ScribeOptimisticRpcProvider {
+func NewScribeOptimisticRPCProvider(client RPCClient, flashbotClient RPCClient) *ScribeOptimisticRpcProvider {
 	return &ScribeOptimisticRpcProvider{
 		client:         client,
 		flashbotClient: flashbotClient,

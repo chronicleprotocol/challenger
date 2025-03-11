@@ -7,7 +7,7 @@ import (
 	"github.com/defiweb/go-eth/types"
 )
 
-type RpcClient interface {
+type RPCClient interface {
 	Accounts(ctx context.Context) ([]types.Address, error)
 
 	BlockNumber(ctx context.Context) (*big.Int, error)

@@ -12,7 +12,7 @@ import (
 // WaitForTxConfirmation waits for the transaction to be confirmed.
 func WaitForTxConfirmation(
 	ctx context.Context,
-	client RpcClient,
+	client RPCClient,
 	txHash *types.Hash,
 	timeout time.Duration,
 ) (*types.TransactionReceipt, error) {
