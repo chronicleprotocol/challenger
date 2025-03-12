@@ -40,7 +40,6 @@ const OpPokedEventSig = "0xb9dc937c5e394d0c8f76e0e324500b88251b4c909ddc56232df10
 type Challenger struct {
 	ctx                context.Context
 	address            types.Address
-	fromBlock          uint64
 	subscriptionURL    string
 	provider           IScribeOptimisticProvider
 	lastProcessedBlock *big.Int
@@ -52,23 +51,27 @@ func NewChallenger(
 	ctx context.Context,
 	address types.Address,
 	provider IScribeOptimisticProvider,
-	fromBlock uint64,
+	fromBlock int64,
 	subscriptionURL string,
 	wg *sync.WaitGroup,
 ) *Challenger {
+	var latestBlock *big.Int
+	if fromBlock != 0 {
+		latestBlock = big.NewInt(fromBlock)
+	}
 	return &Challenger{
-		ctx:             ctx,
-		address:         address,
-		provider:        provider,
-		fromBlock:       fromBlock,
-		wg:              wg,
-		subscriptionURL: subscriptionURL,
+		ctx:                ctx,
+		address:            address,
+		provider:           provider,
+		lastProcessedBlock: latestBlock,
+		wg:                 wg,
+		subscriptionURL:    subscriptionURL,
 	}
 }
 
 // Gets earliest block number we can look `OpPoked` events from.
 func (c *Challenger) getEarliestBlockNumber(lastBlock *big.Int, period uint16) *big.Int {
-	// Calculate earliest block number.
+	// Calculate the earliest block number.
 	blocksPerPeriod := uint64(period) / slotPeriodInSec
 	if lastBlock.Cmp(big.NewInt(int64(blocksPerPeriod))) == -1 {
 		return big.NewInt(0)
@@ -92,31 +95,68 @@ func (c *Challenger) getFromBlockNumber(latestBlockNumber *big.Int, period uint1
 
 func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uint16) bool {
 	if poke == nil || poke.BlockNumber == nil {
-		logger.Info("OpPoked or block number is nil")
+		logger.
+			WithField("address", c.address).
+			Info("OpPoked or block number is nil")
 		return false
 	}
 	block, err := c.provider.BlockByNumber(c.ctx, poke.BlockNumber)
 	if err != nil {
-		logger.Errorf("Failed to get block by number %d with error: %v", poke.BlockNumber, err)
+		logger.
+			WithField("address", c.address).
+			Errorf("Failed to get block by number %d with error: %v", poke.BlockNumber, err)
 		return false
 	}
 	challengeableSince := time.Now().Add(-time.Second * time.Duration(challengePeriod))
 
 	// Not challengeable by time
 	if block.Timestamp.Before(challengeableSince) {
-		logger.Infof("Not challengeable by time %v", challengeableSince)
+		logger.
+			WithField("address", c.address).
+			Infof("Not challengeable by time %v", challengeableSince)
 		return false
 	}
 
 	valid, err := c.provider.IsPokeSignatureValid(c.ctx, c.address, poke)
 	if err != nil {
-		logger.Errorf("Failed to verify OpPoked signature with error: %v", err)
+		logger.
+			WithField("address", c.address).
+			Errorf("Failed to verify OpPoked signature with error: %v", err)
 		return false
 	}
-	logger.Infof("Is opPoke signature valid? %v", valid)
+	logger.
+		WithField("address", c.address).
+		Infof("Is opPoke signature valid? %v", valid)
 
 	// Only challengeable if signature is not valid
 	return !valid
+}
+
+// SpawnChallenge spawns new goroutine and challenges the `OpPoked` event.
+func (c *Challenger) SpawnChallenge(poke *OpPokedEvent) {
+	go func() {
+		logger.
+			WithField("address", c.address).
+			Warnf("Challenging OpPoked event from block %v", poke.BlockNumber)
+		txHash, _, err := c.provider.ChallengePoke(c.ctx, c.address, poke)
+		if err != nil {
+			logger.
+				WithField("address", c.address).
+				Errorf("failed to challenge OpPoked event from block %v with error: %v", poke.BlockNumber, err)
+			return
+		}
+		logger.
+			WithField("address", c.address).
+			WithField("txHash", txHash).
+			Infof("Challenge successful")
+
+		// Adding metrics
+		ChallengeCounter.WithLabelValues(
+			c.address.String(),
+			c.provider.GetFrom(c.ctx).String(),
+			txHash.String(),
+		).Inc()
+	}()
 }
 
 func (c *Challenger) executeTick() error {
@@ -136,7 +176,9 @@ func (c *Challenger) executeTick() error {
 		return fmt.Errorf("failed to get blocknumber from period: %v", err)
 	}
 
-	logger.Debugf("[%v] Block number to start with: %d", c.address, fromBlockNumber)
+	logger.
+		WithField("address", c.address).
+		Debugf("Block number to start with: %d", fromBlockNumber)
 
 	pokeLogs, err := c.provider.GetPokes(c.ctx, c.address, fromBlockNumber, latestBlockNumber)
 	if err != nil {
@@ -151,7 +193,9 @@ func (c *Challenger) executeTick() error {
 	LastScannedBlockGauge.WithLabelValues(c.address.String(), c.provider.GetFrom(c.ctx).String()).Set(asFloat64)
 
 	if len(pokeLogs) == 0 {
-		logger.Debugf("No logs found")
+		logger.
+			WithField("address", c.address).
+			Debugf("No logs found")
 		return nil
 	}
 
@@ -164,22 +208,13 @@ func (c *Challenger) executeTick() error {
 
 	for _, poke := range pokes {
 		if !c.isPokeChallengeable(poke, period) {
-			logger.Debugf("Event from block %v is not challengeable", poke.BlockNumber)
+			logger.
+				WithField("address", c.address).
+				Debugf("Event from block %v is not challengeable", poke.BlockNumber)
 			continue
 		}
-		logger.Warnf("Challenging OpPoked event from block %v", poke.BlockNumber)
-		txHash, _, err := c.provider.ChallengePoke(c.ctx, c.address, poke)
-		if err != nil {
-			return fmt.Errorf("failed to challenge OpPoked event from block %v with error: %v", poke.BlockNumber, err)
-		}
-		logger.Infof("Challenge transaction hash: %v", txHash.String())
 
-		// Adding metrics
-		ChallengeCounter.WithLabelValues(
-			c.address.String(),
-			c.provider.GetFrom(c.ctx).String(),
-			txHash.String(),
-		).Inc()
+		c.SpawnChallenge(poke)
 	}
 
 	return nil
@@ -193,7 +228,9 @@ func (c *Challenger) Run() error {
 	// Executing first tick
 	err := c.executeTick()
 	if err != nil {
-		logger.Errorf("Failed to execute tick with error: %v", err)
+		logger.
+			WithField("address", c.address).
+			Errorf("Failed to execute tick with error: %v", err)
 
 		// Add error to metrics
 		ErrorsCounter.WithLabelValues(
@@ -203,7 +240,9 @@ func (c *Challenger) Run() error {
 		).Inc()
 	}
 
-	logger.Infof("Monitoring contract %v", c.address)
+	logger.
+		WithField("address", c.address).
+		Infof("Started contract monitoring")
 
 	if c.subscriptionURL == "" { // We poll
 		ticker := time.NewTicker(30 * time.Second)
@@ -211,15 +250,21 @@ func (c *Challenger) Run() error {
 		for {
 			select {
 			case <-c.ctx.Done():
-				logger.Infof("Terminate challenger")
+				logger.
+					WithField("address", c.address).
+					Infof("Terminate challenger")
 				return nil
 
 			case t := <-ticker.C:
-				logger.Debugf("Tick at: %v", t)
+				logger.
+					WithField("address", c.address).
+					Debugf("Tick at: %v", t)
 
 				err := c.executeTick()
 				if err != nil {
-					logger.Errorf("Failed to execute tick with error: %v", err)
+					logger.
+						WithField("address", c.address).
+						Errorf("Failed to execute tick with error: %v", err)
 					// Add error to metrics
 					ErrorsCounter.WithLabelValues(
 						c.address.String(),
@@ -237,7 +282,9 @@ func (c *Challenger) Run() error {
 // Listen listens for `OpPoked` events from WS connection and challenges them if they are challengeable.
 // It requires you to provide WS connection to challenger.
 func (c *Challenger) Listen() error {
-	logger.Infof("Listening for events from %v", c.address)
+	logger.
+		WithField("address", c.address).
+		Infof("Listening for events from %v", c.address)
 	ethcli, err := ethclient.Dial(c.subscriptionURL)
 	if err != nil {
 		return err
@@ -258,13 +305,17 @@ func (c *Challenger) Listen() error {
 	for {
 		select {
 		case <-c.ctx.Done():
-			logger.Infof("Terminate challenger")
+			logger.
+				WithField("address", c.address).
+				Infof("Terminate challenger")
 			return nil
 		case err := <-sub.Err():
 			return err
 		case evlog := <-logs:
 			if evlog.Topics[0].Hex() != OpPokedEventSig {
-				logger.Infof("Event occurred, but is not 'opPoked': %s", evlog.Topics[0].Hex())
+				logger.
+					WithField("address", c.address).
+					Infof("Event occurred, but is not 'opPoked': %s", evlog.Topics[0].Hex())
 				continue
 			}
 
@@ -273,7 +324,9 @@ func (c *Challenger) Listen() error {
 			if err != nil {
 				return err
 			}
-			logger.Infof("opPoked event for %v", addr)
+			logger.
+				WithField("address", c.address).
+				Infof("opPoked event for %v", addr)
 
 			topics := make([]types.Hash, 0)
 			for _, topic := range evlog.Topics {
@@ -301,15 +354,11 @@ func (c *Challenger) Listen() error {
 			}
 
 			if c.isPokeChallengeable(poke, period) {
-				logger.Warnf("Challenging opPoke sent from %v", common.BytesToAddress(evlog.Topics[1].Bytes()))
-				txHash, _, err := c.provider.ChallengePoke(c.ctx, c.address, poke)
-				if err != nil {
-					return fmt.Errorf(
-						"failed to challenge OpPoked event from block %v with error: %v", poke.BlockNumber, err)
-				}
-				logger.Infof("Challenge transaction hash: %v", txHash.String())
+				c.SpawnChallenge(poke)
 			} else {
-				logger.Debugf("Event from block %v is not challengeable", poke.BlockNumber)
+				logger.
+					WithField("address", c.address).
+					Debugf("Event from block %v is not challengeable", poke.BlockNumber)
 			}
 		}
 	}

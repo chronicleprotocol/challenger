@@ -26,13 +26,13 @@ import (
 	"sync"
 
 	challenger "github.com/chronicleprotocol/challenger/core"
-	"github.com/defiweb/go-eth/txmodifier"
-	"github.com/defiweb/go-eth/wallet"
 	logger "github.com/sirupsen/logrus"
 
 	"github.com/defiweb/go-eth/rpc"
 	"github.com/defiweb/go-eth/rpc/transport"
+	"github.com/defiweb/go-eth/txmodifier"
 	"github.com/defiweb/go-eth/types"
+	"github.com/defiweb/go-eth/wallet"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
@@ -48,9 +48,10 @@ type options struct {
 	Password        string
 	PasswordFile    string
 	RpcURL          string
+	FlashbotRPCURL  string
 	SubscriptionURL string
 	Address         []string
-	FromBlock       uint64
+	FromBlock       int64
 	ChainID         uint64
 	TransactionType string
 }
@@ -139,11 +140,6 @@ func main() {
 				defer ctxCancel()
 			}
 
-			t, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.RpcURL})
-			if err != nil {
-				logger.Fatalf("Failed to create transport: %v", err)
-			}
-
 			// Key generation
 			key, err := opts.getKey()
 			if err != nil {
@@ -152,10 +148,6 @@ func main() {
 
 			// Basic TX modifiers
 			txModifiers := []rpc.TXModifier{
-				txmodifier.NewGasLimitEstimator(txmodifier.GasLimitEstimatorOptions{
-					MaxGas:     maxGasLimit,
-					Multiplier: defaultGasLimitMultiplier,
-				}),
 				txmodifier.NewNonceProvider(txmodifier.NonceProviderOptions{
 					UsePendingBlock: false,
 					Replace:         false,
@@ -194,25 +186,68 @@ func main() {
 				logger.Fatalf("Unknown transaction type: %s. Have to be legacy, eip1559 or none", opts.TransactionType)
 			}
 
+			// Create a JSON-RPC client to mainnet.
+			t, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.RpcURL})
+			if err != nil {
+				logger.Fatalf("Failed to create transport: %v", err)
+			}
+
+			// Set manual gas limit for flashbots, they might require more gas.
+			//nolint:gocritic
+			baseTxModifiers := append(txModifiers, txmodifier.NewGasLimitEstimator(txmodifier.GasLimitEstimatorOptions{
+				MaxGas:     maxGasLimit,
+				Multiplier: defaultGasLimitMultiplier,
+			}))
+
 			clientOptions := []rpc.ClientOptions{
 				rpc.WithTransport(t),
 				rpc.WithKeys(key),
 				rpc.WithDefaultAddress(key.Address()),
-				rpc.WithTXModifiers(txModifiers...),
+				rpc.WithTXModifiers(baseTxModifiers...),
 			}
 
-			// Create a JSON-RPC client.
 			client, err := rpc.NewClient(clientOptions...)
 			if err != nil {
 				logger.Fatalf("Failed to create RPC client: %v", err)
 			}
 
+			// Create a JSON-RPC client to flashbot.
+			var flashbotClient *rpc.Client
+			if opts.FlashbotRPCURL != "" {
+				flashbotTransport, err := transport.NewHTTP(transport.HTTPOptions{URL: opts.FlashbotRPCURL})
+				if err != nil {
+					logger.Fatalf("Failed to create transport: %v", err)
+				}
+
+				// Set manual gas limit for flashbots, they might require more gas.
+				//nolint:gocritic
+				flashbotTxModifiers := append(txModifiers, txmodifier.NewGasLimitEstimator(txmodifier.GasLimitEstimatorOptions{
+					MaxGas:     challenger.MaxFlashbotGasLimit,
+					Multiplier: defaultGasLimitMultiplier,
+					Replace:    false,
+				}))
+
+				// TODO: tx modifiers have to be similar ?
+				flashbotClientOptions := []rpc.ClientOptions{
+					rpc.WithTransport(flashbotTransport),
+					rpc.WithKeys(key),
+					rpc.WithDefaultAddress(key.Address()),
+					rpc.WithTXModifiers(flashbotTxModifiers...),
+				}
+
+				flashbotClient, err = rpc.NewClient(flashbotClientOptions...)
+				if err != nil {
+					logger.Fatalf("Failed to create RPC client: %v", err)
+				}
+			}
+
+			// Spawning "challenger" for each address
 			var wg sync.WaitGroup
 			for _, address := range addresses {
 				wg.Add(1)
 
-				p := challenger.NewScribeOptimisticRpcProvider(client)
-				c := challenger.NewChallenger(ctx, address, p, 0, opts.SubscriptionURL, &wg)
+				p := challenger.NewScribeOptimisticRPCProvider(client, flashbotClient)
+				c := challenger.NewChallenger(ctx, address, p, opts.FromBlock, opts.SubscriptionURL, &wg)
 
 				go func(addr types.Address) {
 					err := c.Run()
@@ -237,8 +272,9 @@ func main() {
 				)
 				http.Handle("/metrics", promhttp.Handler())
 				// TODO: move `:9090` to config
-				logger.WithError(http.ListenAndServe(":9090", nil)). //nolint:gosec
-											Error("metrics server error")
+				logger.
+					WithError(http.ListenAndServe(":9090", nil)). //nolint:gosec
+					Error("metrics server error")
 				<-ctx.Done()
 			}()
 
@@ -251,9 +287,11 @@ func main() {
 	cmd.PersistentFlags().StringVar(&opts.Password, "password", "", "Key raw password as text")
 	cmd.PersistentFlags().StringVar(&opts.PasswordFile, "password-file", "", "Path to key password file")
 	cmd.PersistentFlags().StringVar(&opts.RpcURL, "rpc-url", "", "Node HTTP RPC_URL, normally starts with https://****")
+	cmd.PersistentFlags().StringVar(&opts.FlashbotRPCURL, "flashbot-rpc-url", "", "Flashbot Node HTTP RPC_URL, normally starts with https://****")
 	cmd.PersistentFlags().StringVar(&opts.SubscriptionURL, "subscription-url", "", "[Optional] Used if you want to subscribe to events rather than poll, typically starts with wss://****")
 	cmd.PersistentFlags().StringArrayVarP(&opts.Address, "addresses", "a", []string{}, "ScribeOptimistic contract address. Example: `0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f`")
-	cmd.PersistentFlags().Uint64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
+	cmd.PersistentFlags().
+		Int64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
 	cmd.PersistentFlags().Uint64Var(&opts.ChainID, "chain-id", 0, "If no chain_id provided binary will try to get chain_id from given RPC")
 	cmd.PersistentFlags().StringVar(&opts.TransactionType, "tx-type", "none", "Transaction type definition, possible values are: `legacy`, `eip1559` or `none`")
 
