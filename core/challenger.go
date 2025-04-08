@@ -26,11 +26,6 @@ import (
 	logger "github.com/sirupsen/logrus"
 
 	"github.com/defiweb/go-eth/types"
-
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/common"
-	gethtypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 const slotPeriodInSec = 12
@@ -40,7 +35,6 @@ const OpPokedEventSig = "0xb9dc937c5e394d0c8f76e0e324500b88251b4c909ddc56232df10
 type Challenger struct {
 	ctx                context.Context
 	address            types.Address
-	subscriptionURL    string
 	provider           IScribeOptimisticProvider
 	lastProcessedBlock *big.Int
 	wg                 *sync.WaitGroup
@@ -52,7 +46,6 @@ func NewChallenger(
 	address types.Address,
 	provider IScribeOptimisticProvider,
 	fromBlock int64,
-	subscriptionURL string,
 	wg *sync.WaitGroup,
 ) *Challenger {
 	var latestBlock *big.Int
@@ -65,7 +58,6 @@ func NewChallenger(
 		provider:           provider,
 		lastProcessedBlock: latestBlock,
 		wg:                 wg,
-		subscriptionURL:    subscriptionURL,
 	}
 }
 
@@ -244,63 +236,7 @@ func (c *Challenger) Run() error {
 		WithField("address", c.address).
 		Infof("Started contract monitoring")
 
-	if c.subscriptionURL == "" { // We poll
-		ticker := time.NewTicker(30 * time.Second)
-
-		for {
-			select {
-			case <-c.ctx.Done():
-				logger.
-					WithField("address", c.address).
-					Infof("Terminate challenger")
-				return nil
-
-			case t := <-ticker.C:
-				logger.
-					WithField("address", c.address).
-					Debugf("Tick at: %v", t)
-
-				err := c.executeTick()
-				if err != nil {
-					logger.
-						WithField("address", c.address).
-						Errorf("Failed to execute tick with error: %v", err)
-					// Add error to metrics
-					ErrorsCounter.WithLabelValues(
-						c.address.String(),
-						c.provider.GetFrom(c.ctx).String(),
-						err.Error(),
-					).Inc()
-				}
-			}
-		}
-	} else { // Event based
-		return c.Listen()
-	}
-}
-
-// Listen listens for `OpPoked` events from WS connection and challenges them if they are challengeable.
-// It requires you to provide WS connection to challenger.
-func (c *Challenger) Listen() error {
-	logger.
-		WithField("address", c.address).
-		Infof("Listening for events from %v", c.address)
-	ethcli, err := ethclient.Dial(c.subscriptionURL)
-	if err != nil {
-		return err
-	}
-
-	//nolint:typecheck
-	query := ethereum.FilterQuery{
-		Addresses: []common.Address{common.HexToAddress(c.address.String())},
-	}
-
-	logs := make(chan gethtypes.Log)
-
-	sub, err := ethcli.SubscribeFilterLogs(c.ctx, query, logs)
-	if err != nil {
-		return err
-	}
+	ticker := time.NewTicker(30 * time.Second)
 
 	for {
 		select {
@@ -309,56 +245,23 @@ func (c *Challenger) Listen() error {
 				WithField("address", c.address).
 				Infof("Terminate challenger")
 			return nil
-		case err := <-sub.Err():
-			return err
-		case evlog := <-logs:
-			if evlog.Topics[0].Hex() != OpPokedEventSig {
-				logger.
-					WithField("address", c.address).
-					Infof("Event occurred, but is not 'opPoked': %s", evlog.Topics[0].Hex())
-				continue
-			}
 
-			// Marshal go-ethereum data to defiweb types
-			addr, err := types.AddressFromBytes(evlog.Address.Bytes())
-			if err != nil {
-				return err
-			}
+		case t := <-ticker.C:
 			logger.
 				WithField("address", c.address).
-				Infof("opPoked event for %v", addr)
+				Debugf("Tick at: %v", t)
 
-			topics := make([]types.Hash, 0)
-			for _, topic := range evlog.Topics {
-				t, err := types.HashFromBytes(topic.Bytes(), types.PadLeft)
-				if err != nil {
-					return err
-				}
-				topics = append(topics, t)
-			}
-			log := types.Log{
-				Address:     addr,
-				Topics:      topics,
-				Data:        evlog.Data,
-				BlockNumber: new(big.Int).SetUint64(evlog.BlockNumber),
-			}
-
-			poke, err := DecodeOpPokeEvent(log)
+			err := c.executeTick()
 			if err != nil {
-				return err
-			}
-
-			period, err := c.provider.GetChallengePeriod(c.ctx, c.address)
-			if err != nil {
-				return fmt.Errorf("failed to get challenge period with error: %v", err)
-			}
-
-			if c.isPokeChallengeable(poke, period) {
-				c.SpawnChallenge(poke)
-			} else {
 				logger.
 					WithField("address", c.address).
-					Debugf("Event from block %v is not challengeable", poke.BlockNumber)
+					Errorf("Failed to execute tick with error: %v", err)
+				// Add error to metrics
+				ErrorsCounter.WithLabelValues(
+					c.address.String(),
+					c.provider.GetFrom(c.ctx).String(),
+					err.Error(),
+				).Inc()
 			}
 		}
 	}

@@ -49,7 +49,6 @@ type options struct {
 	PasswordFile    string
 	RpcURL          string
 	FlashbotRPCURL  string
-	SubscriptionURL string
 	Address         []string
 	FromBlock       int64
 	ChainID         uint64
@@ -247,7 +246,7 @@ func main() {
 				wg.Add(1)
 
 				p := challenger.NewScribeOptimisticRPCProvider(client, flashbotClient)
-				c := challenger.NewChallenger(ctx, address, p, opts.FromBlock, opts.SubscriptionURL, &wg)
+				c := challenger.NewChallenger(ctx, address, p, opts.FromBlock, &wg)
 
 				go func(addr types.Address) {
 					err := c.Run()
@@ -288,7 +287,6 @@ func main() {
 	cmd.PersistentFlags().StringVar(&opts.PasswordFile, "password-file", "", "Path to key password file")
 	cmd.PersistentFlags().StringVar(&opts.RpcURL, "rpc-url", "", "Node HTTP RPC_URL, normally starts with https://****")
 	cmd.PersistentFlags().StringVar(&opts.FlashbotRPCURL, "flashbot-rpc-url", "", "Flashbot Node HTTP RPC_URL, normally starts with https://****")
-	cmd.PersistentFlags().StringVar(&opts.SubscriptionURL, "subscription-url", "", "[Optional] Used if you want to subscribe to events rather than poll, typically starts with wss://****")
 	cmd.PersistentFlags().StringArrayVarP(&opts.Address, "addresses", "a", []string{}, "ScribeOptimistic contract address. Example: `0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f`")
 	cmd.PersistentFlags().
 		Int64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")

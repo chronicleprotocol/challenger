@@ -118,7 +118,6 @@ function start_challenger {
         --keystore "$ETH_KEYSTORE_FILE" \
         --password "$ETH_PASS" \
         --chain-id "$chainid" \
-        --subscription-url "$ETH_WSS_URL" | tee /tmp/challenger-test.log)&
 
     sleep 5
     cecho "Challenger running"
