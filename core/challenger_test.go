@@ -80,7 +80,7 @@ func TestGetFromBlockNumber(t *testing.T) {
 	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
 	mockedProvider := new(mockScribeOptimisticProvider)
 
-	c := NewChallenger(context.TODO(), address, mockedProvider, 0, "", nil)
+	c := NewChallenger(context.TODO(), address, mockedProvider, 0, nil)
 	require.NotNil(t, c)
 
 	// Error on nil as latest block number
@@ -104,7 +104,7 @@ func TestIsPokeChallengeable(t *testing.T) {
 	challengePeriod := uint16(600)
 	poke := OpPokedEvent{BlockNumber: big.NewInt(1000)}
 
-	c := NewChallenger(context.TODO(), address, mockedProvider, 0, "", nil)
+	c := NewChallenger(context.TODO(), address, mockedProvider, 0, nil)
 	require.NotNil(t, c)
 
 	assert.False(t, c.isPokeChallengeable(nil, 600))
