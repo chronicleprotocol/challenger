@@ -9,6 +9,10 @@ import (
 	logger "github.com/sirupsen/logrus"
 )
 
+// txConfirmationPollInterval is the polling interval for checking transaction confirmations.
+// Defaults to ~1 block time. Overridden in tests for fast execution.
+var txConfirmationPollInterval = 12 * time.Second
+
 // WaitForTxConfirmation waits for the transaction to be confirmed.
 func WaitForTxConfirmation(
 	ctx context.Context,
@@ -24,7 +28,7 @@ func WaitForTxConfirmation(
 	}
 
 	// check +- every block
-	ticker := time.NewTicker(12 * time.Second)
+	ticker := time.NewTicker(txConfirmationPollInterval)
 	defer ticker.Stop()
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
