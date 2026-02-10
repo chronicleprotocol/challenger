@@ -19,10 +19,10 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 
 	challenger "github.com/chronicleprotocol/challenger/core"
@@ -53,15 +53,10 @@ type options struct {
 	FromBlock       int64
 	ChainID         uint64
 	TransactionType string
+	MetricsAddr     string
+	LogLevel        string
 }
 
-var (
-	maxGasLimit              = uint64(0)
-	maxGasFee                = (*big.Int)(nil)
-	maxGasPriorityFee        = (*big.Int)(nil)
-	gasFeeMultiplier         = float64(1)
-	gasPriorityFeeMultiplier = float64(1)
-)
 
 // Checks and return private key based on given options
 func (o *options) getKey() (*wallet.PrivateKey, error) {
@@ -92,7 +87,7 @@ func (o *options) getKey() (*wallet.PrivateKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to read password file: %v", err)
 		}
-		password = string(p)
+		password = strings.TrimRight(string(p), "\n\r")
 	}
 
 	return wallet.NewKeyFromJSON(o.Key, password)
@@ -102,11 +97,14 @@ func main() {
 	var opts options
 	cmd := &cobra.Command{
 		Use:     "run",
-		Args:    cobra.ExactArgs(1),
+		Args:    cobra.NoArgs,
 		Aliases: []string{"agent"},
 		Run: func(cmd *cobra.Command, args []string) {
-			// TODO: update after completion
-			logger.SetLevel(logger.DebugLevel)
+			lvl, err := logger.ParseLevel(opts.LogLevel)
+			if err != nil {
+				logger.Fatalf("Invalid log level %q: %v", opts.LogLevel, err)
+			}
+			logger.SetLevel(lvl)
 
 			logger.Debugf("Hello, Challenger!")
 
@@ -164,19 +162,19 @@ func main() {
 			switch opts.TransactionType {
 			case "legacy":
 				txModifiers = append(txModifiers, txmodifier.NewLegacyGasFeeEstimator(txmodifier.LegacyGasFeeEstimatorOptions{
-					Multiplier:  gasFeeMultiplier,
+					Multiplier:  1,
 					MinGasPrice: nil,
-					MaxGasPrice: maxGasFee,
+					MaxGasPrice: nil,
 					Replace:     false,
 				}))
 			case "eip1559":
 				txModifiers = append(txModifiers, txmodifier.NewEIP1559GasFeeEstimator(txmodifier.EIP1559GasFeeEstimatorOptions{
-					GasPriceMultiplier:          gasFeeMultiplier,
-					PriorityFeePerGasMultiplier: gasPriorityFeeMultiplier,
+					GasPriceMultiplier:          1,
+					PriorityFeePerGasMultiplier: 1,
 					MinGasPrice:                 nil,
-					MaxGasPrice:                 maxGasFee,
+					MaxGasPrice:                 nil,
 					MinPriorityFeePerGas:        nil,
-					MaxPriorityFeePerGas:        maxGasPriorityFee,
+					MaxPriorityFeePerGas:        nil,
 					Replace:                     false,
 				}))
 			case "", "none":
@@ -194,7 +192,7 @@ func main() {
 			// Set manual gas limit for flashbots, they might require more gas.
 			//nolint:gocritic
 			baseTxModifiers := append(txModifiers, txmodifier.NewGasLimitEstimator(txmodifier.GasLimitEstimatorOptions{
-				MaxGas:     maxGasLimit,
+				MaxGas:     0,
 				Multiplier: defaultGasLimitMultiplier,
 			}))
 
@@ -255,7 +253,6 @@ func main() {
 						challenger.ErrorsCounter.WithLabelValues(
 							addr.String(),
 							p.GetFrom(ctx).String(),
-							err.Error(),
 						).Inc()
 
 						logger.Fatalf("Failed to run challenger: %v", err)
@@ -270,11 +267,16 @@ func main() {
 					challenger.LastScannedBlockGauge,
 				)
 				http.Handle("/metrics", promhttp.Handler())
-				// TODO: move `:9090` to config
-				logger.
-					WithError(http.ListenAndServe(":9090", nil)). //nolint:gosec
-					Error("metrics server error")
-				<-ctx.Done()
+				srv := &http.Server{Addr: opts.MetricsAddr} //nolint:gosec
+				go func() {
+					<-ctx.Done()
+					if err := srv.Shutdown(context.Background()); err != nil {
+						logger.WithError(err).Error("metrics server shutdown error")
+					}
+				}()
+				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					logger.WithError(err).Error("metrics server error")
+				}
 			}()
 
 			wg.Wait()
@@ -292,6 +294,10 @@ func main() {
 		Int64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
 	cmd.PersistentFlags().Uint64Var(&opts.ChainID, "chain-id", 0, "If no chain_id provided binary will try to get chain_id from given RPC")
 	cmd.PersistentFlags().StringVar(&opts.TransactionType, "tx-type", "none", "Transaction type definition, possible values are: `legacy`, `eip1559` or `none`")
+	cmd.PersistentFlags().StringVar(&opts.MetricsAddr, "metrics-addr", ":9090", "Address for the Prometheus metrics server")
+	cmd.PersistentFlags().StringVar(&opts.LogLevel, "log-level", "info", "Log level: trace, debug, info, warn, error, fatal, panic")
 
-	_ = cmd.Execute()
+	if err := cmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 }

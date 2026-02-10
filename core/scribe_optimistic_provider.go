@@ -20,6 +20,7 @@ import (
 	_ "embed"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/defiweb/go-eth/abi"
@@ -40,6 +41,8 @@ var ScribeOptimisticContractABI = abi.MustParseJSON(scribeOptimisticContractJSON
 type ScribeOptimisticRpcProvider struct {
 	client         RPCClient
 	flashbotClient RPCClient
+	fromOnce       sync.Once
+	fromAddr       types.Address
 }
 
 // NewScribeOptimisticRPCProvider creates a new instance of ScribeOptimisticRpcProvider.
@@ -53,16 +56,19 @@ func NewScribeOptimisticRPCProvider(client RPCClient, flashbotClient RPCClient) 
 }
 
 func (s *ScribeOptimisticRpcProvider) GetFrom(ctx context.Context) types.Address {
-	accs, err := s.client.Accounts(ctx)
-	if err != nil {
-		logger.Errorf("failed to get accounts with error: %v", err)
-		return types.ZeroAddress
-	}
-	if len(accs) == 0 {
-		logger.Errorf("no accounts found")
-		return types.ZeroAddress
-	}
-	return accs[0]
+	s.fromOnce.Do(func() {
+		accs, err := s.client.Accounts(ctx)
+		if err != nil {
+			logger.Errorf("failed to get accounts with error: %v", err)
+			return
+		}
+		if len(accs) == 0 {
+			logger.Errorf("no accounts found")
+			return
+		}
+		s.fromAddr = accs[0]
+	})
+	return s.fromAddr
 }
 
 func (s *ScribeOptimisticRpcProvider) BlockByNumber(ctx context.Context, blockNumber *big.Int) (*types.Block, error) {
@@ -78,7 +84,7 @@ func (s *ScribeOptimisticRpcProvider) GetChallengePeriod(ctx context.Context, ad
 	opChallengePeriod := ScribeOptimisticContractABI.Methods["opChallengePeriod"]
 	calldata, err := opChallengePeriod.EncodeArgs()
 	if err != nil {
-		panic(err)
+		return 0, fmt.Errorf("failed to encode opChallengePeriod args: %v", err)
 	}
 	b, _, err := s.client.Call(ctx, &types.Call{
 		To:    &address,

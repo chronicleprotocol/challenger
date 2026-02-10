@@ -56,29 +56,42 @@ func (m *mockRpcClient) GetTransactionReceipt(ctx context.Context, hash types.Ha
 }
 
 func TestGetFrom(t *testing.T) {
-	mockRpcClient := new(mockRpcClient)
-	provider := NewScribeOptimisticRPCProvider(mockRpcClient, nil)
-
 	// gets zero address if no accounts
-	call := mockRpcClient.On("Accounts", mock.Anything).Return([]types.Address{}, nil)
-	addr := provider.GetFrom(context.TODO())
+	mockClient1 := new(mockRpcClient)
+	provider1 := NewScribeOptimisticRPCProvider(mockClient1, nil)
+	call := mockClient1.On("Accounts", mock.Anything).Return([]types.Address{}, nil)
+	addr := provider1.GetFrom(context.TODO())
 	assert.Equal(t, types.ZeroAddress, addr)
-	mockRpcClient.AssertExpectations(t)
+	mockClient1.AssertExpectations(t)
 	call.Unset()
 
 	// zero address on error
-	call = mockRpcClient.On("Accounts", mock.Anything).Return([]types.Address{}, fmt.Errorf("error"))
-	addr = provider.GetFrom(context.TODO())
+	mockClient2 := new(mockRpcClient)
+	provider2 := NewScribeOptimisticRPCProvider(mockClient2, nil)
+	call = mockClient2.On("Accounts", mock.Anything).Return([]types.Address{}, fmt.Errorf("error"))
+	addr = provider2.GetFrom(context.TODO())
 	assert.Equal(t, types.ZeroAddress, addr)
-	mockRpcClient.AssertExpectations(t)
+	mockClient2.AssertExpectations(t)
 	call.Unset()
 
 	// gets first account
-	call = mockRpcClient.On("Accounts", mock.Anything).Return([]types.Address{{0x1}}, nil)
-	addr = provider.GetFrom(context.TODO())
+	mockClient3 := new(mockRpcClient)
+	provider3 := NewScribeOptimisticRPCProvider(mockClient3, nil)
+	call = mockClient3.On("Accounts", mock.Anything).Return([]types.Address{{0x1}}, nil)
+	addr = provider3.GetFrom(context.TODO())
 	assert.Equal(t, types.Address{0x1}, addr)
-	mockRpcClient.AssertExpectations(t)
+	mockClient3.AssertExpectations(t)
 	call.Unset()
+
+	// cached result is returned on subsequent calls
+	mockClient4 := new(mockRpcClient)
+	provider4 := NewScribeOptimisticRPCProvider(mockClient4, nil)
+	mockClient4.On("Accounts", mock.Anything).Return([]types.Address{{0x2}}, nil).Once()
+	addr = provider4.GetFrom(context.TODO())
+	assert.Equal(t, types.Address{0x2}, addr)
+	addr = provider4.GetFrom(context.TODO())
+	assert.Equal(t, types.Address{0x2}, addr)
+	mockClient4.AssertExpectations(t)
 }
 
 func TestGetChallengePeriod(t *testing.T) {
