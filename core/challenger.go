@@ -130,6 +130,13 @@ func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uin
 // SpawnChallenge spawns new goroutine and challenges the `OpPoked` event.
 // It skips the challenge if one is already in-flight for the same block number.
 func (c *Challenger) SpawnChallenge(poke *OpPokedEvent) {
+	if poke == nil || poke.BlockNumber == nil {
+		logger.
+			WithField("address", c.address).
+			Error("SpawnChallenge called with nil poke or nil block number")
+		return
+	}
+
 	blockNum := poke.BlockNumber.Uint64()
 
 	c.inFlightMu.Lock()

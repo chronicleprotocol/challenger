@@ -93,6 +93,47 @@ func TestGetFrom(t *testing.T) {
 	addr = provider4.GetFrom(context.TODO())
 	assert.Equal(t, types.Address{0x2}, addr)
 	mockClient4.AssertExpectations(t)
+
+	t.Run("retries after transient error", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+
+		// First call: error
+		client.On("Accounts", mock.Anything).
+			Return([]types.Address{}, fmt.Errorf("rpc down")).Once()
+		addr := provider.GetFrom(context.TODO())
+		assert.Equal(t, types.ZeroAddress, addr)
+
+		// Second call: success (retried because first failed)
+		client.On("Accounts", mock.Anything).
+			Return([]types.Address{{0x5}}, nil).Once()
+		addr = provider.GetFrom(context.TODO())
+		assert.Equal(t, types.Address{0x5}, addr)
+
+		// Third call: cached, no RPC
+		addr = provider.GetFrom(context.TODO())
+		assert.Equal(t, types.Address{0x5}, addr)
+		client.AssertExpectations(t)
+	})
+
+	t.Run("retries after empty accounts", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+
+		// First call: empty
+		client.On("Accounts", mock.Anything).
+			Return([]types.Address{}, nil).Once()
+		addr := provider.GetFrom(context.TODO())
+		assert.Equal(t, types.ZeroAddress, addr)
+
+		// Second call: now has accounts
+		client.On("Accounts", mock.Anything).
+			Return([]types.Address{{0x6}}, nil).Once()
+		addr = provider.GetFrom(context.TODO())
+		assert.Equal(t, types.Address{0x6}, addr)
+
+		client.AssertExpectations(t)
+	})
 }
 
 func TestGetChallengePeriod(t *testing.T) {

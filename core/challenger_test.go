@@ -265,8 +265,9 @@ func TestSpawnChallengeDuplicateProtection(t *testing.T) {
 
 		// Use a channel to block ChallengePoke so the goroutine stays in-flight.
 		gate := make(chan struct{})
+		entered := make(chan struct{})
 		mockedProvider.On("ChallengePoke", mock.Anything, mock.Anything, mock.Anything).
-			Run(func(args mock.Arguments) { <-gate }).
+			Run(func(args mock.Arguments) { close(entered); <-gate }).
 			Return(&txHash, &types.Transaction{}, nil)
 		mockedProvider.On("GetFrom", mock.Anything).Return(from)
 
@@ -276,8 +277,8 @@ func TestSpawnChallengeDuplicateProtection(t *testing.T) {
 		// First call should proceed and mark block 1000 as in-flight.
 		c.SpawnChallenge(poke)
 
-		// Give goroutine time to start and hit the gate.
-		time.Sleep(50 * time.Millisecond)
+		// Wait for goroutine to enter ChallengePoke.
+		<-entered
 
 		// Second call with same block should be skipped (no additional goroutine).
 		c.SpawnChallenge(poke)
@@ -289,7 +290,12 @@ func TestSpawnChallengeDuplicateProtection(t *testing.T) {
 		close(gate)
 
 		// Wait for the goroutine to finish and clean up.
-		time.Sleep(50 * time.Millisecond)
+		require.Eventually(t, func() bool {
+			c.inFlightMu.Lock()
+			defer c.inFlightMu.Unlock()
+			_, ok := c.inFlight[1000]
+			return !ok
+		}, 2*time.Second, 10*time.Millisecond)
 
 		// After completion, block 1000 should no longer be in-flight.
 		c.inFlightMu.Lock()
@@ -309,12 +315,22 @@ func TestSpawnChallengeDuplicateProtection(t *testing.T) {
 
 		// First challenge.
 		c.SpawnChallenge(poke)
-		time.Sleep(50 * time.Millisecond)
+		require.Eventually(t, func() bool {
+			c.inFlightMu.Lock()
+			defer c.inFlightMu.Unlock()
+			_, ok := c.inFlight[2000]
+			return !ok
+		}, 2*time.Second, 10*time.Millisecond)
 
 		// After first goroutine completes, block should be removed from in-flight.
 		// Second call should proceed normally.
 		c.SpawnChallenge(poke)
-		time.Sleep(50 * time.Millisecond)
+		require.Eventually(t, func() bool {
+			c.inFlightMu.Lock()
+			defer c.inFlightMu.Unlock()
+			_, ok := c.inFlight[2000]
+			return !ok
+		}, 2*time.Second, 10*time.Millisecond)
 
 		// ChallengePoke should have been called twice total.
 		mockedProvider.AssertNumberOfCalls(t, "ChallengePoke", 2)
@@ -324,8 +340,9 @@ func TestSpawnChallengeDuplicateProtection(t *testing.T) {
 		mockedProvider := new(mockScribeOptimisticProvider)
 
 		gate := make(chan struct{})
+		entered := make(chan struct{}, 2)
 		mockedProvider.On("ChallengePoke", mock.Anything, mock.Anything, mock.Anything).
-			Run(func(args mock.Arguments) { <-gate }).
+			Run(func(args mock.Arguments) { entered <- struct{}{}; <-gate }).
 			Return(&txHash, &types.Transaction{}, nil)
 		mockedProvider.On("GetFrom", mock.Anything).Return(from)
 
@@ -337,13 +354,19 @@ func TestSpawnChallengeDuplicateProtection(t *testing.T) {
 		c.SpawnChallenge(poke1)
 		c.SpawnChallenge(poke2)
 
-		time.Sleep(50 * time.Millisecond)
+		// Wait for both goroutines to enter ChallengePoke.
+		<-entered
+		<-entered
 
 		// Both should have started since they have different block numbers.
 		mockedProvider.AssertNumberOfCalls(t, "ChallengePoke", 2)
 
 		close(gate)
-		time.Sleep(50 * time.Millisecond)
+		require.Eventually(t, func() bool {
+			c.inFlightMu.Lock()
+			defer c.inFlightMu.Unlock()
+			return len(c.inFlight) == 0
+		}, 2*time.Second, 10*time.Millisecond)
 	})
 }
 
@@ -449,7 +472,8 @@ func TestExecuteTick(t *testing.T) {
 		poke := &OpPokedEvent{BlockNumber: big.NewInt(500)}
 		p.On("GetPokes", mock.Anything, address, big.NewInt(100), big.NewInt(1000)).
 			Return([]*OpPokedEvent{poke}, nil)
-		p.On("GetFrom", mock.Anything).Return(from)
+		// First GetFrom call is synchronous (executeTick metrics).
+		p.On("GetFrom", mock.Anything).Return(from).Once()
 		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(100), big.NewInt(1000)).
 			Return([]*OpPokeChallengedSuccessfullyEvent{}, nil)
 		// Block is recent — within challenge period.
@@ -459,13 +483,18 @@ func TestExecuteTick(t *testing.T) {
 		p.On("IsPokeSignatureValid", mock.Anything, address, poke).Return(false, nil)
 		p.On("ChallengePoke", mock.Anything, address, poke).
 			Return(&txHash, &types.Transaction{}, nil)
+		// Second GetFrom call is async (SpawnChallenge goroutine metrics).
+		goroutineDone := make(chan struct{})
+		p.On("GetFrom", mock.Anything).
+			Run(func(args mock.Arguments) { close(goroutineDone) }).
+			Return(from).Once()
 
 		c := NewChallenger(context.TODO(), address, p, 100, &sync.WaitGroup{})
 		err := c.executeTick()
 		assert.NoError(t, err)
 
 		// Wait for the SpawnChallenge goroutine to complete.
-		time.Sleep(50 * time.Millisecond)
+		<-goroutineDone
 
 		p.AssertCalled(t, "ChallengePoke", mock.Anything, address, poke)
 		p.AssertExpectations(t)
@@ -556,7 +585,11 @@ func TestRun(t *testing.T) {
 		p := new(mockScribeOptimisticProvider)
 		// First tick (startup): error.
 		p.On("BlockNumber", mock.Anything).Return((*big.Int)(nil), fmt.Errorf("rpc down"))
-		p.On("GetFrom", mock.Anything).Return(from)
+		// GetFrom is called by handleTickError before the loop starts.
+		tickHandled := make(chan struct{})
+		p.On("GetFrom", mock.Anything).
+			Run(func(args mock.Arguments) { close(tickHandled) }).
+			Return(from)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		var wg sync.WaitGroup
@@ -571,9 +604,10 @@ func TestRun(t *testing.T) {
 			close(done)
 		}()
 
+		// Wait for handleTickError to complete (signals the loop is starting).
+		<-tickHandled
 		// Even though tick errored, Run should still be running.
 		// Cancel to exit cleanly.
-		time.Sleep(50 * time.Millisecond)
 		cancel()
 		wg.Wait()
 		<-done
@@ -612,16 +646,46 @@ func TestGetEarliestBlockNumber(t *testing.T) {
 func TestSpawnChallengeErrorPath(t *testing.T) {
 	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
 
+	t.Run("nil poke returns early", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		c := NewChallenger(context.TODO(), address, p, 0, &sync.WaitGroup{})
+
+		c.SpawnChallenge(nil)
+
+		// No RPC calls should be made.
+		p.AssertNotCalled(t, "ChallengePoke")
+	})
+
+	t.Run("nil BlockNumber returns early", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		c := NewChallenger(context.TODO(), address, p, 0, &sync.WaitGroup{})
+
+		c.SpawnChallenge(&OpPokedEvent{BlockNumber: nil})
+
+		// No RPC calls should be made.
+		p.AssertNotCalled(t, "ChallengePoke")
+	})
+
 	t.Run("ChallengePoke error does not record metrics", func(t *testing.T) {
 		p := new(mockScribeOptimisticProvider)
+		called := make(chan struct{})
 		p.On("ChallengePoke", mock.Anything, mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) { close(called) }).
 			Return((*types.Hash)(nil), (*types.Transaction)(nil), fmt.Errorf("tx failed"))
 
 		c := NewChallenger(context.TODO(), address, p, 0, &sync.WaitGroup{})
 		poke := &OpPokedEvent{BlockNumber: big.NewInt(5000)}
 
 		c.SpawnChallenge(poke)
-		time.Sleep(50 * time.Millisecond)
+		<-called
+
+		// Wait for goroutine to finish (clean up inFlight after ChallengePoke returns).
+		require.Eventually(t, func() bool {
+			c.inFlightMu.Lock()
+			defer c.inFlightMu.Unlock()
+			_, ok := c.inFlight[5000]
+			return !ok
+		}, 2*time.Second, 10*time.Millisecond)
 
 		// ChallengePoke was called but GetFrom should NOT be called (metrics not recorded on error).
 		p.AssertCalled(t, "ChallengePoke", mock.Anything, mock.Anything, mock.Anything)
