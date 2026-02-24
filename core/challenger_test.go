@@ -81,7 +81,7 @@ func TestGetFromBlockNumber(t *testing.T) {
 	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
 	mockedProvider := new(mockScribeOptimisticProvider)
 
-	c := NewChallenger(context.TODO(), address, mockedProvider, 0, nil)
+	c := NewChallenger(context.TODO(), address, mockedProvider, 0, 0, nil)
 	require.NotNil(t, c)
 
 	// Error on nil as latest block number
@@ -105,7 +105,7 @@ func TestIsPokeChallengeable(t *testing.T) {
 	challengePeriod := uint16(600)
 	poke := OpPokedEvent{BlockNumber: big.NewInt(1000)}
 
-	c := NewChallenger(context.TODO(), address, mockedProvider, 0, nil)
+	c := NewChallenger(context.TODO(), address, mockedProvider, 0, 0, nil)
 	require.NotNil(t, c)
 
 	assert.False(t, c.isPokeChallengeable(nil, 600))
@@ -271,7 +271,7 @@ func TestSpawnChallengeDuplicateProtection(t *testing.T) {
 			Return(&txHash, &types.Transaction{}, nil)
 		mockedProvider.On("GetFrom", mock.Anything).Return(from)
 
-		c := NewChallenger(context.TODO(), address, mockedProvider, 0, &sync.WaitGroup{})
+		c := NewChallenger(context.TODO(), address, mockedProvider, 0, 0, &sync.WaitGroup{})
 		poke := &OpPokedEvent{BlockNumber: big.NewInt(1000)}
 
 		// First call should proceed and mark block 1000 as in-flight.
@@ -310,7 +310,7 @@ func TestSpawnChallengeDuplicateProtection(t *testing.T) {
 			Return(&txHash, &types.Transaction{}, nil)
 		mockedProvider.On("GetFrom", mock.Anything).Return(from)
 
-		c := NewChallenger(context.TODO(), address, mockedProvider, 0, &sync.WaitGroup{})
+		c := NewChallenger(context.TODO(), address, mockedProvider, 0, 0, &sync.WaitGroup{})
 		poke := &OpPokedEvent{BlockNumber: big.NewInt(2000)}
 
 		// First challenge.
@@ -346,7 +346,7 @@ func TestSpawnChallengeDuplicateProtection(t *testing.T) {
 			Return(&txHash, &types.Transaction{}, nil)
 		mockedProvider.On("GetFrom", mock.Anything).Return(from)
 
-		c := NewChallenger(context.TODO(), address, mockedProvider, 0, &sync.WaitGroup{})
+		c := NewChallenger(context.TODO(), address, mockedProvider, 0, 0, &sync.WaitGroup{})
 
 		poke1 := &OpPokedEvent{BlockNumber: big.NewInt(3000)}
 		poke2 := &OpPokedEvent{BlockNumber: big.NewInt(4000)}
@@ -379,7 +379,7 @@ func TestExecuteTick(t *testing.T) {
 		p := new(mockScribeOptimisticProvider)
 		p.On("BlockNumber", mock.Anything).Return((*big.Int)(nil), fmt.Errorf("rpc down"))
 
-		c := NewChallenger(context.TODO(), address, p, 100, nil)
+		c := NewChallenger(context.TODO(), address, p, 100, 0, nil)
 		err := c.executeTick()
 		assert.ErrorContains(t, err, "failed to get latest block number")
 		p.AssertExpectations(t)
@@ -390,7 +390,7 @@ func TestExecuteTick(t *testing.T) {
 		p.On("BlockNumber", mock.Anything).Return(big.NewInt(1000), nil)
 		p.On("GetChallengePeriod", mock.Anything, address).Return(0, fmt.Errorf("contract error"))
 
-		c := NewChallenger(context.TODO(), address, p, 100, nil)
+		c := NewChallenger(context.TODO(), address, p, 100, 0, nil)
 		err := c.executeTick()
 		assert.ErrorContains(t, err, "failed to get challenge period")
 		p.AssertExpectations(t)
@@ -403,7 +403,7 @@ func TestExecuteTick(t *testing.T) {
 		p.On("GetPokes", mock.Anything, address, big.NewInt(100), big.NewInt(1000)).
 			Return(([]*OpPokedEvent)(nil), fmt.Errorf("logs error"))
 
-		c := NewChallenger(context.TODO(), address, p, 100, nil)
+		c := NewChallenger(context.TODO(), address, p, 100, 0, nil)
 		err := c.executeTick()
 		assert.ErrorContains(t, err, "failed to get OpPoked events")
 		p.AssertExpectations(t)
@@ -417,7 +417,7 @@ func TestExecuteTick(t *testing.T) {
 			Return([]*OpPokedEvent{}, nil)
 		p.On("GetFrom", mock.Anything).Return(from)
 
-		c := NewChallenger(context.TODO(), address, p, 100, nil)
+		c := NewChallenger(context.TODO(), address, p, 100, 0, nil)
 		err := c.executeTick()
 		assert.NoError(t, err)
 		assert.Equal(t, big.NewInt(1000), c.lastProcessedBlock)
@@ -436,7 +436,7 @@ func TestExecuteTick(t *testing.T) {
 		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(100), big.NewInt(1000)).
 			Return(([]*OpPokeChallengedSuccessfullyEvent)(nil), fmt.Errorf("logs error"))
 
-		c := NewChallenger(context.TODO(), address, p, 100, nil)
+		c := NewChallenger(context.TODO(), address, p, 100, 0, nil)
 		err := c.executeTick()
 		assert.ErrorContains(t, err, "failed to get OpPokeChallengedSuccessfully events")
 		p.AssertExpectations(t)
@@ -457,7 +457,7 @@ func TestExecuteTick(t *testing.T) {
 		p.On("BlockByNumber", mock.Anything, big.NewInt(500)).
 			Return(&types.Block{Number: big.NewInt(500), Timestamp: ts}, nil)
 
-		c := NewChallenger(context.TODO(), address, p, 100, nil)
+		c := NewChallenger(context.TODO(), address, p, 100, 0, nil)
 		err := c.executeTick()
 		assert.NoError(t, err)
 		// ChallengePoke should never be called.
@@ -489,7 +489,7 @@ func TestExecuteTick(t *testing.T) {
 			Run(func(args mock.Arguments) { close(goroutineDone) }).
 			Return(from).Once()
 
-		c := NewChallenger(context.TODO(), address, p, 100, &sync.WaitGroup{})
+		c := NewChallenger(context.TODO(), address, p, 100, 0, &sync.WaitGroup{})
 		err := c.executeTick()
 		assert.NoError(t, err)
 
@@ -512,7 +512,7 @@ func TestExecuteTick(t *testing.T) {
 		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(100), big.NewInt(1000)).
 			Return([]*OpPokeChallengedSuccessfullyEvent{{BlockNumber: big.NewInt(505)}}, nil)
 
-		c := NewChallenger(context.TODO(), address, p, 100, nil)
+		c := NewChallenger(context.TODO(), address, p, 100, 0, nil)
 		err := c.executeTick()
 		assert.NoError(t, err)
 		// No pokes remain after filtering, so no block lookups or challenges.
@@ -530,7 +530,7 @@ func TestExecuteTick(t *testing.T) {
 			Return([]*OpPokedEvent{}, nil).Once()
 		p.On("GetFrom", mock.Anything).Return(from)
 
-		c := NewChallenger(context.TODO(), address, p, 100, nil)
+		c := NewChallenger(context.TODO(), address, p, 100, 0, nil)
 		err := c.executeTick()
 		assert.NoError(t, err)
 		assert.Equal(t, big.NewInt(1000), c.lastProcessedBlock)
@@ -564,7 +564,7 @@ func TestRun(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(1)
 
-		c := NewChallenger(ctx, address, p, 100, &wg)
+		c := NewChallenger(ctx, address, p, 100, 0, &wg)
 
 		done := make(chan struct{})
 		go func() {
@@ -595,7 +595,7 @@ func TestRun(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(1)
 
-		c := NewChallenger(ctx, address, p, 100, &wg)
+		c := NewChallenger(ctx, address, p, 100, 0, &wg)
 
 		done := make(chan struct{})
 		go func() {
@@ -616,7 +616,7 @@ func TestRun(t *testing.T) {
 
 func TestGetEarliestBlockNumber(t *testing.T) {
 	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
-	c := NewChallenger(context.TODO(), address, nil, 0, nil)
+	c := NewChallenger(context.TODO(), address, nil, 0, 0, nil)
 
 	t.Run("block less than blocksPerPeriod returns zero", func(t *testing.T) {
 		// period=600, blocksPerPeriod = 600/12 = 50, lastBlock=30 < 50
@@ -648,7 +648,7 @@ func TestSpawnChallengeErrorPath(t *testing.T) {
 
 	t.Run("nil poke returns early", func(t *testing.T) {
 		p := new(mockScribeOptimisticProvider)
-		c := NewChallenger(context.TODO(), address, p, 0, &sync.WaitGroup{})
+		c := NewChallenger(context.TODO(), address, p, 0, 0, &sync.WaitGroup{})
 
 		c.SpawnChallenge(nil)
 
@@ -658,7 +658,7 @@ func TestSpawnChallengeErrorPath(t *testing.T) {
 
 	t.Run("nil BlockNumber returns early", func(t *testing.T) {
 		p := new(mockScribeOptimisticProvider)
-		c := NewChallenger(context.TODO(), address, p, 0, &sync.WaitGroup{})
+		c := NewChallenger(context.TODO(), address, p, 0, 0, &sync.WaitGroup{})
 
 		c.SpawnChallenge(&OpPokedEvent{BlockNumber: nil})
 
@@ -673,7 +673,7 @@ func TestSpawnChallengeErrorPath(t *testing.T) {
 			Run(func(args mock.Arguments) { close(called) }).
 			Return((*types.Hash)(nil), (*types.Transaction)(nil), fmt.Errorf("tx failed"))
 
-		c := NewChallenger(context.TODO(), address, p, 0, &sync.WaitGroup{})
+		c := NewChallenger(context.TODO(), address, p, 0, 0, &sync.WaitGroup{})
 		poke := &OpPokedEvent{BlockNumber: big.NewInt(5000)}
 
 		c.SpawnChallenge(poke)
@@ -696,5 +696,193 @@ func TestSpawnChallengeErrorPath(t *testing.T) {
 		_, stillInFlight := c.inFlight[5000]
 		c.inFlightMu.Unlock()
 		assert.False(t, stillInFlight)
+	})
+}
+
+func TestGetPokesInRange(t *testing.T) {
+	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
+
+	t.Run("maxBlockRange=0 makes single call without chunking", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		poke := &OpPokedEvent{BlockNumber: big.NewInt(500)}
+		p.On("GetPokes", mock.Anything, address, big.NewInt(100), big.NewInt(1000)).
+			Return([]*OpPokedEvent{poke}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 0, nil)
+		result, err := c.getPokesInRange(big.NewInt(100), big.NewInt(1000))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokedEvent{poke}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetPokes", 1)
+	})
+
+	t.Run("range fits within one chunk makes single call", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		poke := &OpPokedEvent{BlockNumber: big.NewInt(150)}
+		p.On("GetPokes", mock.Anything, address, big.NewInt(100), big.NewInt(200)).
+			Return([]*OpPokedEvent{poke}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getPokesInRange(big.NewInt(100), big.NewInt(200))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokedEvent{poke}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetPokes", 1)
+	})
+
+	t.Run("range splits into exact chunks", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		poke1 := &OpPokedEvent{BlockNumber: big.NewInt(200)}
+		poke2 := &OpPokedEvent{BlockNumber: big.NewInt(700)}
+		// chunk1: [100, 599], chunk2: [600, 1099] — but toBlock is 1099 so exact fit
+		p.On("GetPokes", mock.Anything, address, big.NewInt(100), big.NewInt(599)).
+			Return([]*OpPokedEvent{poke1}, nil).Once()
+		p.On("GetPokes", mock.Anything, address, big.NewInt(600), big.NewInt(1099)).
+			Return([]*OpPokedEvent{poke2}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getPokesInRange(big.NewInt(100), big.NewInt(1099))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokedEvent{poke1, poke2}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetPokes", 2)
+	})
+
+	t.Run("last chunk is truncated to toBlock", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		poke1 := &OpPokedEvent{BlockNumber: big.NewInt(200)}
+		poke2 := &OpPokedEvent{BlockNumber: big.NewInt(650)}
+		// chunk1: [100, 599], chunk2: [600, 700] (truncated from 1099)
+		p.On("GetPokes", mock.Anything, address, big.NewInt(100), big.NewInt(599)).
+			Return([]*OpPokedEvent{poke1}, nil).Once()
+		p.On("GetPokes", mock.Anything, address, big.NewInt(600), big.NewInt(700)).
+			Return([]*OpPokedEvent{poke2}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getPokesInRange(big.NewInt(100), big.NewInt(700))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokedEvent{poke1, poke2}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetPokes", 2)
+	})
+
+	t.Run("error on first chunk stops iteration", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		p.On("GetPokes", mock.Anything, address, big.NewInt(100), big.NewInt(599)).
+			Return(([]*OpPokedEvent)(nil), fmt.Errorf("rpc error")).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getPokesInRange(big.NewInt(100), big.NewInt(1099))
+		assert.ErrorContains(t, err, "rpc error")
+		assert.Nil(t, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetPokes", 1)
+	})
+
+	t.Run("fromBlock == toBlock makes exactly one call", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		poke := &OpPokedEvent{BlockNumber: big.NewInt(500)}
+		p.On("GetPokes", mock.Anything, address, big.NewInt(500), big.NewInt(500)).
+			Return([]*OpPokedEvent{poke}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getPokesInRange(big.NewInt(500), big.NewInt(500))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokedEvent{poke}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetPokes", 1)
+	})
+}
+
+func TestGetChallengesInRange(t *testing.T) {
+	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
+
+	t.Run("maxBlockRange=0 makes single call without chunking", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		ch := &OpPokeChallengedSuccessfullyEvent{BlockNumber: big.NewInt(500)}
+		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(100), big.NewInt(1000)).
+			Return([]*OpPokeChallengedSuccessfullyEvent{ch}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 0, nil)
+		result, err := c.getChallengesInRange(big.NewInt(100), big.NewInt(1000))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokeChallengedSuccessfullyEvent{ch}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetSuccessfulChallenges", 1)
+	})
+
+	t.Run("range fits within one chunk makes single call", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		ch := &OpPokeChallengedSuccessfullyEvent{BlockNumber: big.NewInt(150)}
+		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(100), big.NewInt(200)).
+			Return([]*OpPokeChallengedSuccessfullyEvent{ch}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getChallengesInRange(big.NewInt(100), big.NewInt(200))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokeChallengedSuccessfullyEvent{ch}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetSuccessfulChallenges", 1)
+	})
+
+	t.Run("range splits into exact chunks", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		ch1 := &OpPokeChallengedSuccessfullyEvent{BlockNumber: big.NewInt(200)}
+		ch2 := &OpPokeChallengedSuccessfullyEvent{BlockNumber: big.NewInt(700)}
+		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(100), big.NewInt(599)).
+			Return([]*OpPokeChallengedSuccessfullyEvent{ch1}, nil).Once()
+		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(600), big.NewInt(1099)).
+			Return([]*OpPokeChallengedSuccessfullyEvent{ch2}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getChallengesInRange(big.NewInt(100), big.NewInt(1099))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokeChallengedSuccessfullyEvent{ch1, ch2}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetSuccessfulChallenges", 2)
+	})
+
+	t.Run("last chunk is truncated to toBlock", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		ch1 := &OpPokeChallengedSuccessfullyEvent{BlockNumber: big.NewInt(200)}
+		ch2 := &OpPokeChallengedSuccessfullyEvent{BlockNumber: big.NewInt(650)}
+		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(100), big.NewInt(599)).
+			Return([]*OpPokeChallengedSuccessfullyEvent{ch1}, nil).Once()
+		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(600), big.NewInt(700)).
+			Return([]*OpPokeChallengedSuccessfullyEvent{ch2}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getChallengesInRange(big.NewInt(100), big.NewInt(700))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokeChallengedSuccessfullyEvent{ch1, ch2}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetSuccessfulChallenges", 2)
+	})
+
+	t.Run("error on first chunk stops iteration", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(100), big.NewInt(599)).
+			Return(([]*OpPokeChallengedSuccessfullyEvent)(nil), fmt.Errorf("rpc error")).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getChallengesInRange(big.NewInt(100), big.NewInt(1099))
+		assert.ErrorContains(t, err, "rpc error")
+		assert.Nil(t, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetSuccessfulChallenges", 1)
+	})
+
+	t.Run("fromBlock == toBlock makes exactly one call", func(t *testing.T) {
+		p := new(mockScribeOptimisticProvider)
+		ch := &OpPokeChallengedSuccessfullyEvent{BlockNumber: big.NewInt(500)}
+		p.On("GetSuccessfulChallenges", mock.Anything, address, big.NewInt(500), big.NewInt(500)).
+			Return([]*OpPokeChallengedSuccessfullyEvent{ch}, nil).Once()
+
+		c := NewChallenger(context.TODO(), address, p, 0, 500, nil)
+		result, err := c.getChallengesInRange(big.NewInt(500), big.NewInt(500))
+		assert.NoError(t, err)
+		assert.Equal(t, []*OpPokeChallengedSuccessfullyEvent{ch}, result)
+		p.AssertExpectations(t)
+		p.AssertNumberOfCalls(t, "GetSuccessfulChallenges", 1)
 	})
 }

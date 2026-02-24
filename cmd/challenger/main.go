@@ -51,6 +51,7 @@ type options struct {
 	FlashbotRPCURL  string
 	Address         []string
 	FromBlock       int64
+	MaxBlockRange   uint64
 	ChainID         uint64
 	TransactionType string
 	MetricsAddr     string
@@ -244,7 +245,7 @@ func main() {
 				wg.Add(1)
 
 				p := challenger.NewScribeOptimisticRPCProvider(client, flashbotClient)
-				c := challenger.NewChallenger(ctx, address, p, opts.FromBlock, &wg)
+				c := challenger.NewChallenger(ctx, address, p, opts.FromBlock, opts.MaxBlockRange, &wg)
 
 				go func(addr types.Address) {
 					err := c.Run()
@@ -292,6 +293,9 @@ func main() {
 	cmd.PersistentFlags().StringArrayVarP(&opts.Address, "addresses", "a", []string{}, "ScribeOptimistic contract address. Example: `0x891E368fE81cBa2aC6F6cc4b98e684c106e2EF4f`")
 	cmd.PersistentFlags().
 		Int64Var(&opts.FromBlock, "from-block", 0, "Block number to start from. If not provided, binary will try to get it from given RPC")
+	cmd.PersistentFlags().
+		Uint64Var(&opts.MaxBlockRange, "max_block_range", 0,
+			"Maximum number of blocks per eth_getLogs call (0 = unlimited)")
 	cmd.PersistentFlags().Uint64Var(&opts.ChainID, "chain-id", 0, "If no chain_id provided binary will try to get chain_id from given RPC")
 	cmd.PersistentFlags().StringVar(&opts.TransactionType, "tx-type", "none", "Transaction type definition, possible values are: `legacy`, `eip1559` or `none`")
 	cmd.PersistentFlags().StringVar(&opts.MetricsAddr, "metrics-addr", ":9090", "Address for the Prometheus metrics server")

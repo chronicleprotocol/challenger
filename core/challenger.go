@@ -37,6 +37,7 @@ type Challenger struct {
 	address            types.Address
 	provider           IScribeOptimisticProvider
 	lastProcessedBlock *big.Int
+	maxBlockRange      uint64
 	wg                 *sync.WaitGroup
 	inFlight           map[uint64]struct{}
 	inFlightMu         sync.Mutex
@@ -48,6 +49,7 @@ func NewChallenger(
 	address types.Address,
 	provider IScribeOptimisticProvider,
 	fromBlock int64,
+	maxBlockRange uint64,
 	wg *sync.WaitGroup,
 ) *Challenger {
 	var latestBlock *big.Int
@@ -59,6 +61,7 @@ func NewChallenger(
 		address:            address,
 		provider:           provider,
 		lastProcessedBlock: latestBlock,
+		maxBlockRange:      maxBlockRange,
 		wg:                 wg,
 		inFlight:           make(map[uint64]struct{}),
 	}
@@ -86,6 +89,52 @@ func (c *Challenger) getFromBlockNumber(latestBlockNumber *big.Int, period uint1
 	// Calculating earliest block number we can try to challenge OpPoked event from.
 	earliestBlockNumber := c.getEarliestBlockNumber(latestBlockNumber, period)
 	return earliestBlockNumber, nil
+}
+
+// getPokesInRange fetches OpPoked events in chunks of c.maxBlockRange blocks.
+func (c *Challenger) getPokesInRange(fromBlock, toBlock *big.Int) ([]*OpPokedEvent, error) {
+	if c.maxBlockRange == 0 {
+		return c.provider.GetPokes(c.ctx, c.address, fromBlock, toBlock)
+	}
+	var result []*OpPokedEvent
+	chunkSize := new(big.Int).SetUint64(c.maxBlockRange)
+	chunkFrom := new(big.Int).Set(fromBlock)
+	for chunkFrom.Cmp(toBlock) <= 0 {
+		chunkTo := new(big.Int).Add(chunkFrom, new(big.Int).Sub(chunkSize, big.NewInt(1)))
+		if chunkTo.Cmp(toBlock) > 0 {
+			chunkTo = new(big.Int).Set(toBlock)
+		}
+		pokes, err := c.provider.GetPokes(c.ctx, c.address, chunkFrom, chunkTo)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, pokes...)
+		chunkFrom = new(big.Int).Add(chunkTo, big.NewInt(1))
+	}
+	return result, nil
+}
+
+// getChallengesInRange fetches OpPokeChallengedSuccessfully events in chunks.
+func (c *Challenger) getChallengesInRange(fromBlock, toBlock *big.Int) ([]*OpPokeChallengedSuccessfullyEvent, error) {
+	if c.maxBlockRange == 0 {
+		return c.provider.GetSuccessfulChallenges(c.ctx, c.address, fromBlock, toBlock)
+	}
+	var result []*OpPokeChallengedSuccessfullyEvent
+	chunkSize := new(big.Int).SetUint64(c.maxBlockRange)
+	chunkFrom := new(big.Int).Set(fromBlock)
+	for chunkFrom.Cmp(toBlock) <= 0 {
+		chunkTo := new(big.Int).Add(chunkFrom, new(big.Int).Sub(chunkSize, big.NewInt(1)))
+		if chunkTo.Cmp(toBlock) > 0 {
+			chunkTo = new(big.Int).Set(toBlock)
+		}
+		challenges, err := c.provider.GetSuccessfulChallenges(c.ctx, c.address, chunkFrom, chunkTo)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, challenges...)
+		chunkFrom = new(big.Int).Add(chunkTo, big.NewInt(1))
+	}
+	return result, nil
 }
 
 func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uint16) bool {
@@ -202,7 +251,7 @@ func (c *Challenger) executeTick() error {
 		WithField("address", c.address).
 		Debugf("Block number to start with: %d", fromBlockNumber)
 
-	pokeLogs, err := c.provider.GetPokes(c.ctx, c.address, fromBlockNumber, latestBlockNumber)
+	pokeLogs, err := c.getPokesInRange(fromBlockNumber, latestBlockNumber)
 	if err != nil {
 		return fmt.Errorf("failed to get OpPoked events with error: %v", err)
 	}
@@ -221,7 +270,7 @@ func (c *Challenger) executeTick() error {
 		return nil
 	}
 
-	challenges, err := c.provider.GetSuccessfulChallenges(c.ctx, c.address, fromBlockNumber, latestBlockNumber)
+	challenges, err := c.getChallengesInRange(fromBlockNumber, latestBlockNumber)
 	if err != nil {
 		return fmt.Errorf("failed to get OpPokeChallengedSuccessfully events with error: %v", err)
 	}
