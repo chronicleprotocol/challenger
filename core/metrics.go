@@ -8,7 +8,7 @@ var ErrorsCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: prometheusNamespace,
 	Name:      "errors_total",
 	Help:      "Challenger Errors Counter",
-}, []string{"address", "from", "error"})
+}, []string{"address", "from"})
 
 var ChallengeCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: prometheusNamespace,

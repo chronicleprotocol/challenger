@@ -10,6 +10,7 @@ import (
 	"github.com/defiweb/go-eth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 type mockRpcClient struct {
@@ -56,29 +57,42 @@ func (m *mockRpcClient) GetTransactionReceipt(ctx context.Context, hash types.Ha
 }
 
 func TestGetFrom(t *testing.T) {
-	mockRpcClient := new(mockRpcClient)
-	provider := NewScribeOptimisticRPCProvider(mockRpcClient, nil)
-
 	// gets zero address if no accounts
-	call := mockRpcClient.On("Accounts", mock.Anything).Return([]types.Address{}, nil)
-	addr := provider.GetFrom(context.TODO())
+	mockClient1 := new(mockRpcClient)
+	provider1 := NewScribeOptimisticRPCProvider(mockClient1, nil)
+	call := mockClient1.On("Accounts", mock.Anything).Return([]types.Address{}, nil)
+	addr := provider1.GetFrom(context.TODO())
 	assert.Equal(t, types.ZeroAddress, addr)
-	mockRpcClient.AssertExpectations(t)
+	mockClient1.AssertExpectations(t)
 	call.Unset()
 
 	// zero address on error
-	call = mockRpcClient.On("Accounts", mock.Anything).Return([]types.Address{}, fmt.Errorf("error"))
-	addr = provider.GetFrom(context.TODO())
+	mockClient2 := new(mockRpcClient)
+	provider2 := NewScribeOptimisticRPCProvider(mockClient2, nil)
+	call = mockClient2.On("Accounts", mock.Anything).Return([]types.Address{}, fmt.Errorf("error"))
+	addr = provider2.GetFrom(context.TODO())
 	assert.Equal(t, types.ZeroAddress, addr)
-	mockRpcClient.AssertExpectations(t)
+	mockClient2.AssertExpectations(t)
 	call.Unset()
 
 	// gets first account
-	call = mockRpcClient.On("Accounts", mock.Anything).Return([]types.Address{{0x1}}, nil)
-	addr = provider.GetFrom(context.TODO())
+	mockClient3 := new(mockRpcClient)
+	provider3 := NewScribeOptimisticRPCProvider(mockClient3, nil)
+	call = mockClient3.On("Accounts", mock.Anything).Return([]types.Address{{0x1}}, nil)
+	addr = provider3.GetFrom(context.TODO())
 	assert.Equal(t, types.Address{0x1}, addr)
-	mockRpcClient.AssertExpectations(t)
+	mockClient3.AssertExpectations(t)
 	call.Unset()
+
+	// cached result is returned on subsequent calls
+	mockClient4 := new(mockRpcClient)
+	provider4 := NewScribeOptimisticRPCProvider(mockClient4, nil)
+	mockClient4.On("Accounts", mock.Anything).Return([]types.Address{{0x2}}, nil).Once()
+	addr = provider4.GetFrom(context.TODO())
+	assert.Equal(t, types.Address{0x2}, addr)
+	addr = provider4.GetFrom(context.TODO())
+	assert.Equal(t, types.Address{0x2}, addr)
+	mockClient4.AssertExpectations(t)
 }
 
 func TestGetChallengePeriod(t *testing.T) {
@@ -107,4 +121,249 @@ func TestGetChallengePeriod(t *testing.T) {
 	assert.Equal(t, uint16(0), period)
 	mockRpcClient.AssertExpectations(t)
 	call.Unset()
+}
+
+func TestGetPokes(t *testing.T) {
+	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
+
+	t.Run("GetLogs error", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		client.On("GetLogs", mock.Anything, mock.Anything).
+			Return([]types.Log{}, fmt.Errorf("rpc error"))
+
+		result, err := provider.GetPokes(context.TODO(), address, big.NewInt(0), big.NewInt(100))
+		assert.ErrorContains(t, err, "failed to get OpPoked events")
+		assert.Nil(t, result)
+	})
+
+	t.Run("empty logs", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		client.On("GetLogs", mock.Anything, mock.Anything).
+			Return([]types.Log{}, nil)
+
+		result, err := provider.GetPokes(context.TODO(), address, big.NewInt(0), big.NewInt(100))
+		assert.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("decode error skips bad log", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		// Return a log with invalid data that will fail decoding.
+		badLog := types.Log{
+			BlockNumber: big.NewInt(50),
+			Topics:      []types.Hash{},
+			Data:        []byte{0x01},
+		}
+		client.On("GetLogs", mock.Anything, mock.Anything).
+			Return([]types.Log{badLog}, nil)
+
+		result, err := provider.GetPokes(context.TODO(), address, big.NewInt(0), big.NewInt(100))
+		assert.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("successful decode", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		validLog := types.Log{
+			BlockNumber: big.NewInt(50),
+			Topics: []types.Hash{
+				types.MustHashFromHex("0xb9dc937c5e394d0c8f76e0e324500b88251b4c909ddc56232df10e2ea42b3c63", types.PadNone),
+				types.MustHashFromHex("0x0000000000000000000000001f7acda376ef37ec371235a094113df9cb4efee1", types.PadNone),
+				types.MustHashFromHex("0x0000000000000000000000006813eb9362372eef6200f3b1dbc3f819671cba69", types.PadNone),
+			},
+		}
+		client.On("GetLogs", mock.Anything, mock.Anything).
+			Return([]types.Log{validLog}, nil)
+
+		result, err := provider.GetPokes(context.TODO(), address, big.NewInt(0), big.NewInt(100))
+		assert.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, big.NewInt(50), result[0].BlockNumber)
+	})
+}
+
+func TestGetSuccessfulChallenges(t *testing.T) {
+	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
+
+	t.Run("GetLogs error", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		client.On("GetLogs", mock.Anything, mock.Anything).
+			Return([]types.Log{}, fmt.Errorf("rpc error"))
+
+		result, err := provider.GetSuccessfulChallenges(context.TODO(), address, big.NewInt(0), big.NewInt(100))
+		assert.ErrorContains(t, err, "failed to get OpPokeChallengedSuccessfully events")
+		assert.Nil(t, result)
+	})
+
+	t.Run("empty logs", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		client.On("GetLogs", mock.Anything, mock.Anything).
+			Return([]types.Log{}, nil)
+
+		result, err := provider.GetSuccessfulChallenges(context.TODO(), address, big.NewInt(0), big.NewInt(100))
+		assert.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("decode error skips bad log", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		badLog := types.Log{
+			BlockNumber: big.NewInt(50),
+			Topics:      []types.Hash{},
+			Data:        []byte{0x01},
+		}
+		client.On("GetLogs", mock.Anything, mock.Anything).
+			Return([]types.Log{badLog}, nil)
+
+		result, err := provider.GetSuccessfulChallenges(context.TODO(), address, big.NewInt(0), big.NewInt(100))
+		assert.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("successful decode", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		validLog := types.Log{
+			BlockNumber: big.NewInt(50),
+			Topics: []types.Hash{
+				types.MustHashFromHex("0xac50cef58b3aef7f7c30349f5e4a342a29d2325a02eafc8dacfdba391e6d5db3", types.PadNone),
+				types.MustHashFromHex("0x0000000000000000000000001f7acda376ef37ec371235a094113df9cb4efee1", types.PadNone),
+			},
+			Data: types.MustBytesFromHex("0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000004bd2a556b00000000000000000000000000000000000000000000000000000000"),
+		}
+		client.On("GetLogs", mock.Anything, mock.Anything).
+			Return([]types.Log{validLog}, nil)
+
+		result, err := provider.GetSuccessfulChallenges(context.TODO(), address, big.NewInt(0), big.NewInt(100))
+		assert.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, big.NewInt(50), result[0].BlockNumber)
+	})
+}
+
+func TestIsPokeSignatureValid(t *testing.T) {
+	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
+	poke := &OpPokedEvent{
+		BlockNumber: big.NewInt(100),
+		PokeData:    PokeData{Val: big.NewInt(1000), Age: 123},
+	}
+
+	t.Run("constructPokeMessage error", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		client.On("Call", mock.Anything, mock.Anything, types.LatestBlockNumber).
+			Return([]byte{}, nil, fmt.Errorf("call error"))
+
+		valid, err := provider.IsPokeSignatureValid(context.TODO(), address, poke)
+		assert.Error(t, err)
+		assert.False(t, valid)
+	})
+
+	t.Run("isSchnorrSignatureAcceptable error", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		// First Call: constructPokeMessage succeeds with a 32-byte message.
+		msgBytes := hexutil.MustHexToBytes("0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000003e80000000000000000000000000000000000000000000000000000000000000000")
+		call1 := client.On("Call", mock.Anything, mock.Anything, types.LatestBlockNumber).
+			Return(msgBytes, &types.Call{}, nil).Once()
+		// Second Call: isSchnorrSignatureAcceptable fails.
+		client.On("Call", mock.Anything, mock.Anything, types.LatestBlockNumber).
+			Return([]byte{}, nil, fmt.Errorf("signature check error")).Once()
+
+		valid, err := provider.IsPokeSignatureValid(context.TODO(), address, poke)
+		assert.Error(t, err)
+		assert.False(t, valid)
+		call1.Unset()
+	})
+}
+
+func TestChallengePoke(t *testing.T) {
+	address := types.MustAddressFromHex("0x1F7acDa376eF37EC371235a094113dF9Cb4EfEe1")
+	txHash := types.MustHashFromHex("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", types.PadNone)
+	blockHash := types.MustHashFromHex("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", types.PadNone)
+	status := uint64(1)
+	poke := &OpPokedEvent{BlockNumber: big.NewInt(100)}
+
+	receipt := &types.TransactionReceipt{
+		TransactionHash: txHash,
+		Status:          &status,
+		BlockHash:       blockHash,
+		BlockNumber:     big.NewInt(200),
+	}
+
+	t.Run("no flashbot client uses mainnet", func(t *testing.T) {
+		client := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, nil)
+		client.On("SendTransaction", mock.Anything, mock.Anything).
+			Return(&txHash, &types.Transaction{}, nil)
+		client.On("GetTransactionReceipt", mock.Anything, txHash).
+			Return(receipt, nil)
+
+		hash, tx, err := provider.ChallengePoke(context.TODO(), address, poke)
+		require.NoError(t, err)
+		assert.Equal(t, &txHash, hash)
+		assert.NotNil(t, tx)
+		client.AssertExpectations(t)
+	})
+
+	t.Run("flashbot success does not fall back", func(t *testing.T) {
+		client := new(mockRpcClient)
+		flashbot := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, flashbot)
+		flashbot.On("SendTransaction", mock.Anything, mock.Anything).
+			Return(&txHash, &types.Transaction{}, nil)
+		flashbot.On("GetTransactionReceipt", mock.Anything, txHash).
+			Return(receipt, nil)
+
+		hash, tx, err := provider.ChallengePoke(context.TODO(), address, poke)
+		require.NoError(t, err)
+		assert.Equal(t, &txHash, hash)
+		assert.NotNil(t, tx)
+		// Mainnet client should not be called.
+		client.AssertNotCalled(t, "SendTransaction")
+		flashbot.AssertExpectations(t)
+	})
+
+	t.Run("flashbot failure falls back to mainnet", func(t *testing.T) {
+		client := new(mockRpcClient)
+		flashbot := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, flashbot)
+		// Flashbot send fails.
+		flashbot.On("SendTransaction", mock.Anything, mock.Anything).
+			Return((*types.Hash)(nil), (*types.Transaction)(nil), fmt.Errorf("flashbot down"))
+		// Mainnet succeeds.
+		client.On("SendTransaction", mock.Anything, mock.Anything).
+			Return(&txHash, &types.Transaction{}, nil)
+		client.On("GetTransactionReceipt", mock.Anything, txHash).
+			Return(receipt, nil)
+
+		hash, tx, err := provider.ChallengePoke(context.TODO(), address, poke)
+		require.NoError(t, err)
+		assert.Equal(t, &txHash, hash)
+		assert.NotNil(t, tx)
+		flashbot.AssertExpectations(t)
+		client.AssertExpectations(t)
+	})
+
+	t.Run("both flashbot and mainnet fail", func(t *testing.T) {
+		client := new(mockRpcClient)
+		flashbot := new(mockRpcClient)
+		provider := NewScribeOptimisticRPCProvider(client, flashbot)
+		flashbot.On("SendTransaction", mock.Anything, mock.Anything).
+			Return((*types.Hash)(nil), (*types.Transaction)(nil), fmt.Errorf("flashbot down"))
+		client.On("SendTransaction", mock.Anything, mock.Anything).
+			Return((*types.Hash)(nil), (*types.Transaction)(nil), fmt.Errorf("mainnet down"))
+
+		hash, tx, err := provider.ChallengePoke(context.TODO(), address, poke)
+		assert.Error(t, err)
+		assert.Nil(t, hash)
+		assert.Nil(t, tx)
+	})
 }

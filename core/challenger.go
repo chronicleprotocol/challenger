@@ -38,6 +38,8 @@ type Challenger struct {
 	provider           IScribeOptimisticProvider
 	lastProcessedBlock *big.Int
 	wg                 *sync.WaitGroup
+	inFlight           map[uint64]struct{}
+	inFlightMu         sync.Mutex
 }
 
 // NewChallenger creates a new instance of Challenger.
@@ -58,6 +60,7 @@ func NewChallenger(
 		provider:           provider,
 		lastProcessedBlock: latestBlock,
 		wg:                 wg,
+		inFlight:           make(map[uint64]struct{}),
 	}
 }
 
@@ -125,8 +128,28 @@ func (c *Challenger) isPokeChallengeable(poke *OpPokedEvent, challengePeriod uin
 }
 
 // SpawnChallenge spawns new goroutine and challenges the `OpPoked` event.
+// It skips the challenge if one is already in-flight for the same block number.
 func (c *Challenger) SpawnChallenge(poke *OpPokedEvent) {
+	blockNum := poke.BlockNumber.Uint64()
+
+	c.inFlightMu.Lock()
+	if _, ok := c.inFlight[blockNum]; ok {
+		c.inFlightMu.Unlock()
+		logger.
+			WithField("address", c.address).
+			Debugf("Skipping duplicate challenge for block %v, already in-flight", poke.BlockNumber)
+		return
+	}
+	c.inFlight[blockNum] = struct{}{}
+	c.inFlightMu.Unlock()
+
 	go func() {
+		defer func() {
+			c.inFlightMu.Lock()
+			delete(c.inFlight, blockNum)
+			c.inFlightMu.Unlock()
+		}()
+
 		logger.
 			WithField("address", c.address).
 			Warnf("Challenging OpPoked event from block %v", poke.BlockNumber)
@@ -212,31 +235,33 @@ func (c *Challenger) executeTick() error {
 	return nil
 }
 
+func (c *Challenger) handleTickError(err error) {
+	if err == nil {
+		return
+	}
+	logger.
+		WithField("address", c.address).
+		Errorf("Failed to execute tick with error: %v", err)
+	ErrorsCounter.WithLabelValues(
+		c.address.String(),
+		c.provider.GetFrom(c.ctx).String(),
+	).Inc()
+}
+
 // Run starts the challenger processing loop.
-// If you provide `subscriptionURL` - it will listen for events from WS connection otherwise, it will poll for new events every 30 seconds.
+// It polls for new events every 30 seconds.
 func (c *Challenger) Run() error {
 	defer c.wg.Done()
 
 	// Executing first tick
-	err := c.executeTick()
-	if err != nil {
-		logger.
-			WithField("address", c.address).
-			Errorf("Failed to execute tick with error: %v", err)
-
-		// Add error to metrics
-		ErrorsCounter.WithLabelValues(
-			c.address.String(),
-			c.provider.GetFrom(c.ctx).String(),
-			err.Error(),
-		).Inc()
-	}
+	c.handleTickError(c.executeTick())
 
 	logger.
 		WithField("address", c.address).
 		Infof("Started contract monitoring")
 
 	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -251,18 +276,7 @@ func (c *Challenger) Run() error {
 				WithField("address", c.address).
 				Debugf("Tick at: %v", t)
 
-			err := c.executeTick()
-			if err != nil {
-				logger.
-					WithField("address", c.address).
-					Errorf("Failed to execute tick with error: %v", err)
-				// Add error to metrics
-				ErrorsCounter.WithLabelValues(
-					c.address.String(),
-					c.provider.GetFrom(c.ctx).String(),
-					err.Error(),
-				).Inc()
-			}
+			c.handleTickError(c.executeTick())
 		}
 	}
 }
@@ -278,7 +292,7 @@ func PickUnchallengedPokes(pokes []*OpPokedEvent, challenges []*OpPokeChallenged
 
 	if len(pokes) == 1 {
 		for _, challenge := range challenges {
-			if challenge.BlockNumber.Cmp(pokes[0].BlockNumber) == -1 {
+			if challenge.BlockNumber.Cmp(pokes[0].BlockNumber) >= 0 {
 				return result
 			}
 		}
@@ -301,7 +315,7 @@ func PickUnchallengedPokes(pokes []*OpPokedEvent, challenges []*OpPokeChallenged
 				result = append(result, ev)
 				continue
 			}
-			if len(sortable)-1 > i+1 && sortable[i+1].Name() == "OpPokeChallengedSuccessfullyEvent" {
+			if i+1 < len(sortable) && sortable[i+1].Name() == "OpPokeChallengedSuccessfullyEvent" {
 				continue
 			}
 			result = append(result, ev)
