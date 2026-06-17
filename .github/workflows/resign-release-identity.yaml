@@ -1,0 +1,52 @@
+name: WS3a re-sign (release identity)
+# TRANSIENT — added to this repo's main only for the RFC-044.4 WS3a re-sign of
+# backfill-signed digests under the release identity, then removed. It calls the
+# reusable cosign-sign-and-verify.yaml@main so cosign sign runs INSIDE the reusable
+# and records the release SAN (.../cosign-sign-and-verify.yaml@refs/heads/main),
+# NOT this caller's ref. cosign sign is additive (appends the release signature
+# alongside the existing backfill one), so nothing is removed and the dual-attestor
+# Audit gauge tolerates it throughout.
+on:
+  workflow_dispatch:
+    inputs:
+      refs:
+        description: "space/newline separated ghcr.io/chronicleprotocol/<image>@sha256:<digest> OWNED by this repo"
+        required: true
+        type: string
+permissions: {}
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        env:
+          REFS: ${{ inputs.refs }}
+        run: |
+          set -euo pipefail
+          items=()
+          for r in ${REFS}; do
+            [ -z "${r}" ] && continue
+            if [[ "${r}" != *@sha256:* ]]; then echo "bad ref: ${r}" >&2; exit 1; fi
+            tag="${r%@*}"        # ghcr.io/chronicleprotocol/<image>
+            digest="${r##*@}"    # sha256:<digest>
+            items+=("{\"tag\":\"${tag}\",\"digest\":\"${digest}\"}")
+          done
+          [ "${#items[@]}" -gt 0 ] || { echo "no refs" >&2; exit 1; }
+          printf 'matrix={"item":[%s]}\n' "$(IFS=,; echo "${items[*]}")" >> "${GITHUB_OUTPUT}"
+  resign:
+    needs: prep
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prep.outputs.matrix) }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: chronicleprotocol/actions-workflows/.github/workflows/cosign-sign-and-verify.yaml@main
+    with:
+      digest: ${{ matrix.item.digest }}
+      tags: ${{ matrix.item.tag }}
+      repository: ${{ github.repository }}
+      ref: ${{ github.ref }}
