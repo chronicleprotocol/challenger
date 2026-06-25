@@ -83,3 +83,26 @@ jobs:
     with:
       digest: ${{ needs.build-and-push.outputs.digest }}
       tags: ${{ needs.build-and-push.outputs.tags }}
+
+  attest_promotion_vsa:
+    name: Promote-to-prod VSA
+    needs: build-and-push
+    if: ${{ needs.build-and-push.outputs.digest != '' }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+      checks: read
+      statuses: read
+    # Pinned @main, this repo's OWN embedded producer (public repo cannot call the
+    # private actions-workflows reusable), exactly like the sign-image.yaml reference.
+    # The keyless SAN is promote-to-prod.yaml@refs/heads/main; the (Audit)
+    # verify-chronicle-promotion-vsa Kyverno attestor is widened separately to accept it.
+    uses: chronicleprotocol/challenger/.github/workflows/promote-to-prod.yaml@main
+    with:
+      image: ghcr.io/chronicleprotocol/challenger-go
+      digest: ${{ needs.build-and-push.outputs.digest }}
+      tags: ${{ needs.build-and-push.outputs.tags }}
+      source_repository: ${{ github.repository }}
+      source_ref: ${{ github.ref }}
+      allow_unverified_ci: true
