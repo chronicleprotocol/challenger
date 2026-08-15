@@ -12,7 +12,7 @@ jobs:
     name: Code Linting & Unit Tests
     strategy:
       matrix:
-        go-version: [ 1.24.x ]
+        go-version: [ 1.25.x ]
         os: [ ubuntu-latest ]
     runs-on: ${{ matrix.os }}
     steps:
@@ -25,9 +25,11 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
       - name: Linting Code
-        uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84
+        # The older action invokes the linter with an out-format flag that
+        # golangci-lint v2 removed, so the action has to move with the version.
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v1.64
+          version: v2.12.2
           args: --timeout=10m0s
       - name: Build All Binaries
         run: go build ./...
